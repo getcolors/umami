@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Provision a private single-node Umami web analytics service with PostgreSQL and Caddy on DigitalOcean with HTTPS and R2 recovery backups.">
+  <meta name="description" content="Provision a private single-node Umami web analytics service with PostgreSQL 17, Cloudflare HTTPS, rotated credentials, and restore-verified R2 backups on one DigitalOcean Droplet.">
   <title>Umami Package Skill — getcolors</title>
   <style>
-    :root{color-scheme:light;--ink:#1f2328;--muted:#59636e;--line:#d0d7de;--soft:#f6f8fa;--blue:#0969da;--green:#1a7f37;--warn:#9a6700}*{box-sizing:border-box}body{margin:0;color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:920px;margin:auto;padding:64px 28px 100px}h1{font-size:52px;line-height:1.05;margin:0}h2{margin-top:54px;padding-bottom:8px;border-bottom:1px solid var(--line)}h3{margin-top:30px}.lead{font-size:20px;color:var(--muted);max-width:790px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}pre{padding:18px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--soft)}:not(pre)>code{padding:.12em .35em;border-radius:5px;background:var(--soft)}a{color:var(--blue)}.eyebrow{color:var(--green);font-weight:700;letter-spacing:.08em}.callout{padding:16px 18px;border-left:4px solid var(--green);background:#dafbe1}.warning{border-color:var(--warn);background:#fff8c5}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.card{padding:18px;border:1px solid var(--line);border-radius:8px}.card h3{margin-top:0}@media(max-width:650px){main{padding-top:38px}.grid{grid-template-columns:1fr}h1{font-size:40px}}
+    :root{color-scheme:light;--ink:#1f2328;--muted:#59636e;--line:#d0d7de;--soft:#f6f8fa;--blue:#0969da;--green:#1a7f37;--warn:#9a6700}*{box-sizing:border-box}body{margin:0;color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:920px;margin:auto;padding:64px 28px 100px}h1{font-size:52px;line-height:1.05;margin:0}h2{margin-top:54px;padding-bottom:8px;border-bottom:1px solid var(--line)}h3{margin-top:30px}.lead{font-size:20px;color:var(--muted);max-width:790px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}pre{padding:18px;overflow:auto;border:1px solid var(--line);border-radius:8px;background:var(--soft)}:not(pre)>code{padding:.12em .35em;border-radius:5px;background:var(--soft)}a{color:var(--blue)}.eyebrow{color:var(--green);font-weight:700;letter-spacing:.08em}.callout{padding:16px 18px;border-left:4px solid var(--green);background:#dafbe1}.warning{border-color:var(--warn);background:#fff8c5}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.card{padding:18px;border:1px solid var(--line);border-radius:8px}.card h3{margin-top:0}table{width:100%;border-collapse:collapse;margin-top:18px}th,td{padding:9px 12px;border:1px solid var(--line);text-align:left;vertical-align:top;font-size:14.5px}th{background:var(--soft)}@media(max-width:650px){main{padding-top:38px}.grid{grid-template-columns:1fr}h1{font-size:40px}}
   </style>
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-4VKP1WY4QJ"></script>
   <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag('js',new Date());gtag('config','G-4VKP1WY4QJ',{page_title:'Umami Package Skill — getcolors'});</script>
@@ -14,9 +14,9 @@
 <body><main>
   <p class="eyebrow">GREEN PACKAGE SKILL · DIGITALOCEAN · UMAMI</p>
   <h1>Umami Package Skill</h1>
-  <p class="lead">A reproducible Green workflow for one production-oriented Umami web analytics server with colocated PostgreSQL 17, protected behind Caddy and Cloudflare on a guarded DigitalOcean Droplet.</p>
+  <p class="lead">A reproducible Green workflow for one production-oriented Umami web analytics server: pinned Umami and PostgreSQL 17 behind Caddy, Cloudflare DNS and TLS, rotated credentials, and a nightly backup that proves it can be restored before it is uploaded.</p>
 
-  <div class="callout"><strong>Private service boundary.</strong> Only HTTPS and restricted key-only SSH are public. Umami port 3000 and PostgreSQL port 5432 remain inside the Docker Compose network.</div>
+  <div class="callout"><strong>The seeded administrator password is rotated during convergence.</strong> Umami ships with <code>admin</code>/<code>umami</code> and offers no way to set it from the environment, so a fresh server is reachable on the public internet with a published password until something changes it. This package changes it, and acceptance fails if the seeded credentials still authenticate.</div>
 
   <h2>Quick start</h2>
   <pre><code>npx skills add getcolors/umami
@@ -24,45 +24,61 @@ cp .agents/skills/package-umami-green/green ./green
 chmod +x green
 ./green build
 ./green create --dry-run</code></pre>
-  <p>Build renders reproducible output and dry-run walks the workflow without provider side effects. Real creation and deletion require explicit authorization.</p>
+  <p><code>build</code> renders the deployment without credentials. The dry-run walks the whole workflow while skipping every side effect. A real <code>create</code> or <code>delete</code> touches live infrastructure and requires separate authorization.</p>
 
   <h2>Architecture and sizing</h2>
   <div class="grid">
-    <div class="card"><h3>Infrastructure</h3><p>OpenTofu discovers the configured region’s existing default VPC and creates one Ubuntu 24.04 Droplet and firewall. No VPC is created or hard-coded.</p></div>
-    <div class="card"><h3>Runtime</h3><p>Ansible converges a private Docker Compose stack containing Umami (v2.14.0), PostgreSQL 17, and Caddy. Persistent PostgreSQL data lives under <code>/var/lib/umami/postgres</code>.</p></div>
-    <div class="card"><h3>Network</h3><p>Cloudflare publishes the DNS record and Caddy terminates origin TLS. Umami port 3000 and PostgreSQL port 5432 never cross the host boundary.</p></div>
-    <div class="card"><h3>Capacity</h3><p>The desired four-vCPU, 8 GiB Droplet in <code>ams3</code> provides ample capacity for high-throughput event ingestion, PostgreSQL buffering, Caddy reverse-proxying, and automated backups.</p></div>
+    <div class="card"><h3>Compute</h3><p>OpenTofu discovers the configured region’s default VPC at plan time and creates one Ubuntu 24.04 Droplet plus a firewall. No VPC is created and no VPC UUID belongs in desired state; validation rejects one.</p></div>
+    <div class="card"><h3>Runtime</h3><p>Ansible installs Docker and runs three containers: <code>umami</code> <strong>v2.14.0</strong>, <code>postgres:17-alpine</code>, and <code>caddy:2.11.4</code>. PostgreSQL is reachable only on the private Compose network.</p></div>
+    <div class="card"><h3>Public boundary</h3><p>Cloudflare publishes one A record. Only ports 22, 80 and 443 are admitted, from the CIDRs named in desired state. Caddy terminates TLS and proxies to <code>umami:3000</code>; the application port is never published.</p></div>
+    <div class="card"><h3>Sizing</h3><p><code>s-4vcpu-8gb</code>. Umami is a single Node process over PostgreSQL, so this is generous; the headroom is for Docker, image replacement and backup restore checks running beside the live service.</p></div>
   </div>
-  <p>The package pins Umami Server <strong>v2.14.0</strong>, PostgreSQL <strong>17-alpine</strong>, and Caddy <strong>2.11.4</strong>.</p>
+  <p>This is deliberately a single-node design. Process and host restarts recover; a Droplet, disk, or regional failure causes downtime, and there is no automatic failover.</p>
 
-  <h2>Desired state and lifecycle</h2>
-  <p>Non-secret configuration belongs only in <code>colors.yml</code>. It describes the profile, DigitalOcean compute and SSH boundary, DNS, backend, Umami host, backup storage, and retention.</p>
-  <pre><code>./green build
-./green create --dry-run
-./green create
-./green delete</code></pre>
+  <h2>Desired state and credentials</h2>
+  <p><code>colors.yml</code> is the only file you edit, and it holds non-secret values only. It selects the profile, the DigitalOcean region, size and SSH sources, the Cloudflare zone and record, the Umami and PostgreSQL versions, and the backup destination, schedule and retention. See the <a href="skills/package-umami-green/references/configuration.md">configuration reference</a> for every key.</p>
+  <p>Secrets are supplied only as <code>COLORS_PAR_*</code> environment variables, from an ignored <code>.envrc.private</code>. A real <code>create</code> or <code>delete</code> fails before contacting any provider when one is missing:</p>
+  <table>
+    <tr><th>Variable</th><th>Purpose</th></tr>
+    <tr><td><code>COLORS_PAR_DO_TOKEN</code></td><td>DigitalOcean compute and firewall</td></tr>
+    <tr><td><code>COLORS_PAR_CLOUDFLARE_API_TOKEN</code></td><td>DNS record for the configured host</td></tr>
+    <tr><td><code>COLORS_PAR_POSTGRES_PASSWORD</code></td><td>PostgreSQL password, interpolated at converge time</td></tr>
+    <tr><td><code>COLORS_PAR_APP_SECRET_KEY</code></td><td>Umami <code>APP_SECRET</code>; signs sessions. <code>COLORS_PAR_UMAMI_APP_SECRET</code> is accepted as an alternate name</td></tr>
+    <tr><td><code>COLORS_PAR_UMAMI_ADMIN_PASSWORD</code></td><td>Replaces the seeded administrator password during convergence</td></tr>
+    <tr><td><code>COLORS_PAR_BACKUP_R2_ACCESS_KEY_ID</code><br><code>COLORS_PAR_BACKUP_R2_SECRET_ACCESS_KEY</code></td><td>R2 credentials for the backup bucket</td></tr>
+  </table>
   <ul>
-    <li>Supply credentials only as matching <code>COLORS_PAR_*</code> environment variables.</li>
-    <li>Never export <code>COLORS_PAR_PROFILE</code> or edit generated <code>.colors/</code>.</li>
-    <li>Keep <code>compute-prevent-destroy: true</code>; deletion remains separately guarded.</li>
-    <li>Inspect generated output and the dry-run before converging live infrastructure.</li>
+    <li>Never export <code>COLORS_PAR_PROFILE</code>. The profile keys remote state, and overlaying it points one deployment at another’s.</li>
+    <li>Never edit or commit generated <code>.colors/</code> output.</li>
+    <li>Keep <code>compute-prevent-destroy: true</code> in committed desired state.</li>
+    <li>The compose file is rendered on the host with <code>ansible.builtin.template</code> at mode <code>0600</code>, so credentials never appear in generated or tracked files.</li>
   </ul>
 
   <h2>Acceptance and operations</h2>
-  <p>The live convergence verifies the <code>/api/heartbeat</code> health endpoint, ingests a synthetic test event via the <code>/api/send</code> beacon API, and exercises the automated backup service.</p>
-  <pre><code>ssh root@SERVER 'cd /opt/umami &amp;&amp; docker compose ps'
-ssh root@SERVER 'cd /opt/umami &amp;&amp; docker compose logs --tail=200 umami postgres caddy'
-ssh root@SERVER 'systemctl status umami-backup.timer'</code></pre>
+  <pre><code>./green create
+ssh &lt;droplet&gt; 'cd /opt/umami &amp;&amp; docker compose ps'
+ssh &lt;droplet&gt; 'systemctl status umami-backup.timer'
+ssh &lt;droplet&gt; 'journalctl -u umami-backup.service --since=-24h'</code></pre>
+  <p>Acceptance runs at the end of <code>create</code> and reports only what it checked:</p>
+  <ul>
+    <li><strong>HTTPS with certificate verification.</strong> <code>/api/heartbeat</code> must answer over a valid certificate; the check never disables verification.</li>
+    <li><strong>The seeded credentials must fail.</strong> If <code>admin</code>/<code>umami</code> still authenticates, acceptance fails.</li>
+    <li><strong>Ingestion is read back from PostgreSQL.</strong> A synthetic event is posted to <code>/api/send</code> and the row count in <code>website_event</code> must rise. A 2xx with no stored row is reported as <em>dropped</em>, not success. With no website configured yet the verdict is <em>not-configured</em>, which passes and claims nothing.</li>
+    <li><strong>The backup drill is confirmed in R2.</strong> The unit is started and the profile prefix must then contain a non-empty object newer than the run.</li>
+  </ul>
 
-  <h2>Backup, restoration, and disaster recovery</h2>
-  <p>A systemd timer triggers <code>/usr/local/sbin/umami-backup</code>, which executes a consistent <code>pg_dump</code> against the PostgreSQL container, compresses the stream, and uploads it via <code>rclone</code> to Cloudflare R2.</p>
+  <h2>Backups, restoration, and disaster recovery</h2>
+  <p>A systemd timer runs nightly at <code>03:00</code> UTC with a randomised delay. Each run takes a compressed <code>pg_dump</code>, <strong>restores it into a scratch database and requires the schema back</strong>, and only then uploads to the configured R2 bucket under the profile prefix. A truncated or malformed dump fails the unit instead of landing in the bucket looking like a backup.</p>
+  <p>Retention applies to both sides: <code>rclone delete --min-age</code> prunes the bucket to <code>backup-retention-days</code>, and a local <code>find</code> prunes the disk to the same horizon. Pruning only the disk is not a retention policy.</p>
+  <p>To recover, restore the newest object into an empty PostgreSQL 17 database, point a replacement deployment at it, and verify the web UI and event ingestion before moving DNS. Never test restoration over the live database.</p>
 
-  <div class="callout warning"><strong>Single node is durable, not highly available.</strong> A host, disk, region, or operator failure causes downtime. Backup RPO is the timer interval and restoration is manual; the prevent-destroy guard does not replace a tested recovery exercise.</div>
+  <div class="callout warning"><strong>Prevent-destroy is not a backup.</strong> Deleting compute does not authorize deleting R2 objects, the discovered default VPC, unrelated DNS, or any other provider resource. Rotating <code>COLORS_PAR_POSTGRES_PASSWORD</code> on an existing deployment also requires an <code>ALTER USER</code> inside the running container: the value is applied at database initialisation only.</div>
 
   <h2>Development and source</h2>
   <pre><code>bb test
 bb golden
+bb golden:accept
 ./scripts/launcher.sh</code></pre>
-  <p><a href="https://github.com/getcolors/umami">Source on GitHub</a>. Review every golden diff before accepting it.</p>
+  <p>Golden fixtures render the whole deployment from a fixture <code>colors.yml</code> and compare byte for byte; the accept step refuses to copy a rendered tree containing a credential-shaped value. <a href="https://github.com/getcolors/umami">Source on GitHub</a>. Read every golden diff — never accept generated output merely to make the suite pass.</p>
 </main></body>
 </html>
