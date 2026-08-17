@@ -11,6 +11,10 @@ compute-prevent-destroy: true
 
 # --- Umami Service -----------------------------------------------------------
 
+# Acceptance sends its synthetic event here rather than to a real website, so
+# converges do not write test rows into your analytics. Created on demand.
+umami-acceptance-website-domain: colors-acceptance.invalid
+
 umami-host: umami.example.com
 umami-version: v2.14.0
 umami-port: 3000

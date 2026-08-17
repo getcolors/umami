@@ -154,8 +154,34 @@
 (defn event-count [opts ip]
   (some-> (sql opts ip "select count(*) from website_event") parse-long))
 
-(defn website-id [opts ip]
-  (sql opts ip "select website_id from website limit 1"))
+(def acceptance-website-id "00000000-c010-4000-8000-000000000001")
+
+(defn ensure-acceptance-website
+  "A dedicated throwaway website, created on demand. Without one the step
+   reports :not-configured and sends nothing, so the synthetic request is never
+   exercised -- which is how the sibling Rybbit package carried a payload the
+   API had always rejected. Sending to a real website instead would write a
+   test pageview into the operator's analytics on every converge.
+
+   Literals are dollar-quoted because the query travels inside single quotes in
+   a remote shell, and psql prints the INSERT tag before the SELECT result, so
+   the id comes off the last line."
+  [opts ip]
+  (let [domain (or (not-empty (str (:umami-acceptance-website-domain opts)))
+                   "colors-acceptance.invalid")
+        owner "(select user_id from \"user\" limit 1)"]
+    (some->> (sql opts ip
+                  (str "insert into website (website_id, name, domain, created_by, user_id) "
+                       "select $$" acceptance-website-id "$$::uuid, $$colors-acceptance$$, "
+                       "$$" domain "$$, " owner ", " owner " "
+                       "where not exists (select 1 from website "
+                       "where website_id = $$" acceptance-website-id "$$::uuid); "
+                       "select website_id from website "
+                       "where website_id = $$" acceptance-website-id "$$::uuid"))
+             str/split-lines
+             last
+             str/trim
+             (re-matches #"[0-9a-f-]{36}"))))
 
 (defn wait-health [url attempts]
   (loop [n attempts]
@@ -243,7 +269,7 @@
                :green/err "the seeded admin/umami credentials still authenticate; rotate them")
 
         :else
-        (let [website (website-id opts ip)
+        (let [website (ensure-acceptance-website opts ip)
               before (event-count opts ip)]
           (if-not (integer? before)
             (assoc opts :green/exit 1

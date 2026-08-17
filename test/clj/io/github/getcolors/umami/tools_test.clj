@@ -51,3 +51,16 @@
   (let [restore (str/index-of @backup-script "restore check restored no tables")
         upload (str/index-of @backup-script "rclone copyto")]
     (is (< restore upload))))
+
+(deftest acceptance-provisions-its-own-website
+  ;; With no website the step reports :not-configured and sends nothing, so the
+  ;; synthetic request is never exercised — exactly how the sibling package
+  ;; carried a payload its API had always rejected.
+  (let [src (slurp "src/clj/io/github/getcolors/umami/tools.clj")]
+    (is (str/includes? src "ensure-acceptance-website"))
+    (is (str/includes? src "umami-acceptance-website-domain"))
+    ;; Never the operator's own website.
+    (is (not (str/includes? src "select website_id from website limit 1")))
+    ;; Idempotent, and the id must look like one.
+    (is (str/includes? src "where not exists"))
+    (is (str/includes? src "[0-9a-f-]{36}"))))
