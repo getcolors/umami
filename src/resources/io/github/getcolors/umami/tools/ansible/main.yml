@@ -31,10 +31,11 @@
         that:
           - lookup('env', 'COLORS_PAR_POSTGRES_PASSWORD') | length > 0
           - (lookup('env', 'COLORS_PAR_APP_SECRET_KEY') | length > 0) or (lookup('env', 'COLORS_PAR_UMAMI_APP_SECRET') | length > 0)
+          - lookup('env', 'COLORS_PAR_UMAMI_ADMIN_PASSWORD') | length > 0
         fail_msg: >-
-          COLORS_PAR_POSTGRES_PASSWORD and COLORS_PAR_APP_SECRET_KEY (or
-          COLORS_PAR_UMAMI_APP_SECRET) must be set; this stack has no default
-          credentials.
+          COLORS_PAR_POSTGRES_PASSWORD, COLORS_PAR_APP_SECRET_KEY (or
+          COLORS_PAR_UMAMI_APP_SECRET) and COLORS_PAR_UMAMI_ADMIN_PASSWORD must
+          be set; this stack has no default credentials.
         quiet: true
     - name: Render the compose file with run-time credentials
       ansible.builtin.template:
@@ -103,6 +104,39 @@
       retries: 60
       delay: 5
       until: local_health.rc == 0
+    # Umami seeds admin/umami on first start and offers no way to set it from
+    # the environment, so a fresh droplet is reachable on the public internet
+    # with a published password until this runs. bcrypt via pgcrypto matches
+    # what the application writes itself, and the WHERE clause makes a
+    # re-converge with an unchanged password a no-op.
+    - name: Rotate the seeded Umami admin password
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - exec
+          - -T
+          - postgres
+          - psql
+          - -U
+          - <{ postgres-user }>
+          - -d
+          - <{ postgres-db }>
+          - -q
+          - -v
+          - ON_ERROR_STOP=1
+          - -v
+          - pw={{ lookup('env', 'COLORS_PAR_UMAMI_ADMIN_PASSWORD') }}
+          - -f
+          - "-"
+        stdin: |
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          UPDATE "user" SET password = crypt(:'pw', gen_salt('bf', 10))
+           WHERE username = 'admin' AND password <> crypt(:'pw', password);
+      args: {chdir: /opt/umami}
+      register: admin_rotation
+      changed_when: "'UPDATE 1' in admin_rotation.stdout"
+      no_log: true
   handlers:
     - name: Reload systemd
       ansible.builtin.systemd_service: {daemon_reload: true}

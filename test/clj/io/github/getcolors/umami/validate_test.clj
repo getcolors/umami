@@ -34,7 +34,8 @@
                   "COLORS_PAR_R2_ACCESS_KEY_ID" "COLORS_PAR_R2_SECRET_ACCESS_KEY"
                   "COLORS_PAR_BACKUP_R2_ACCESS_KEY_ID"
                   "COLORS_PAR_BACKUP_R2_SECRET_ACCESS_KEY"
-                  "COLORS_PAR_POSTGRES_PASSWORD" "COLORS_PAR_APP_SECRET_KEY"]]
+                  "COLORS_PAR_POSTGRES_PASSWORD" "COLORS_PAR_APP_SECRET_KEY"
+                  "COLORS_PAR_UMAMI_ADMIN_PASSWORD"]]
       (is (str/includes? errors name)))))
 
 (deftest accepts-the-alternate-app-secret-name
