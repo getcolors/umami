@@ -80,3 +80,35 @@
   (is (= 1 (:green/exit (tools/resolved-compute {} {:ip "192.0.2.10"} nil))))
   (is (= 1 (:green/exit (tools/resolved-compute {} {:ip "192.0.2.10"} {}))))
   (is (nil? (:green/exit (tools/resolved-compute {} {:ip "192.0.2.10"} {:ip "5.6.7.8"})))))
+
+(def caddyfile
+  (delay (slurp "src/resources/io/github/getcolors/umami/tools/ansible/Caddyfile")))
+
+(def compose
+  (delay (slurp "src/resources/io/github/getcolors/umami/tools/ansible/compose.yml")))
+
+(def playbook
+  (delay (slurp "src/resources/io/github/getcolors/umami/tools/ansible/main.yml")))
+
+(deftest caddy-access-logging-is-on-and-bounded
+  ;; Access logging is off by default in Caddy, so a successful request left no
+  ;; trace and ingestion had no request-level evidence to debug from.
+  (is (str/includes? @caddyfile "log {"))
+  (is (str/includes? @caddyfile "output stdout"))
+  ;; On, but bounded: json-file never rotates on its own and this endpoint
+  ;; writes a line per request.
+  (is (str/includes? @compose "max-size"))
+  (is (str/includes? @compose "max-file")))
+
+(deftest caddy-reload-is-convergent-not-change-triggered
+  ;; The Caddyfile is a single-file bind mount, so copy-by-rename leaves the
+  ;; container on the old inode and `up -d` will not recreate an unchanged
+  ;; service: the host file looked right while Caddy served the old config.
+  (is (str/includes? @playbook "--force-recreate caddy"))
+  (is (str/includes? @playbook "sha256sum /etc/caddy/Caddyfile"))
+  ;; And it must run once the stack is up, or it recreates against a compose
+  ;; file that has not been rendered yet.
+  (let [converge (str/index-of @playbook "Build and converge pinned containers")
+        reload (str/index-of @playbook "--force-recreate caddy")
+        health (str/index-of @playbook "Wait for Umami health endpoint")]
+    (is (< converge reload health))))

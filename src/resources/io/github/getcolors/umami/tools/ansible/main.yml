@@ -92,6 +92,26 @@
       register: compose_up
       changed_when: "'Created' in (compose_up.stdout + compose_up.stderr) or 'Recreated' in (compose_up.stdout + compose_up.stderr) or 'Starting' in (compose_up.stdout + compose_up.stderr)"
     - ansible.builtin.systemd_service: {name: umami-backup.timer, enabled: true, state: started}
+    # Caddy mounts its Caddyfile as a single file, so ansible.builtin.copy
+    # replaces it by rename and the running container keeps the inode it
+    # started with -- the host file looks correct while Caddy serves the old
+    # config, and `docker compose up -d` does not recreate a service whose
+    # definition is unchanged. Compare what Caddy is actually running, and
+    # key the recreate on that rather than on a changed flag, so a converge
+    # that finds the container stale for any reason repairs it.
+    - name: Read the Caddyfile checksum Caddy is serving
+      ansible.builtin.shell: |
+        docker compose exec -T caddy sha256sum /etc/caddy/Caddyfile 2>/dev/null | awk '{print $1}'
+      args: {chdir: /opt/umami, executable: /bin/bash}
+      register: caddy_running_config
+      changed_when: false
+      failed_when: false
+    - ansible.builtin.stat: {path: /opt/umami/Caddyfile, checksum_algorithm: sha256}
+      register: caddyfile_desired
+    - name: Reload Caddy when its configuration is stale
+      ansible.builtin.command: docker compose up -d --force-recreate caddy
+      args: {chdir: /opt/umami}
+      when: (caddy_running_config.stdout | default('') | trim) != caddyfile_desired.stat.checksum
     - name: Wait for Umami health endpoint inside its container
       ansible.builtin.command:
         argv:
