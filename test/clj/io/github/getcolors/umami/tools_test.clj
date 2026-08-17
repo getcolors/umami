@@ -37,3 +37,17 @@
     (is (not (tools/fresh-backup? [(entry 0 "2026-08-17T03:00:05Z")] since)))
     (is (not (tools/fresh-backup? [] since)))
     (is (not (tools/fresh-backup? nil since)))))
+
+(def backup-script
+  (delay (slurp "src/resources/io/github/getcolors/umami/tools/ansible/backup")))
+
+(deftest backup-proves-it-restores-and-prunes-the-bucket
+  ;; An archive that exists is not an archive that restores, and pruning only
+  ;; the local disk leaves R2 growing without bound.
+  (is (str/includes? @backup-script "CREATE DATABASE"))
+  (is (str/includes? @backup-script "information_schema.tables"))
+  (is (str/includes? @backup-script "rclone delete --min-age"))
+  ;; The restore must happen before the upload, so a bad dump never lands.
+  (let [restore (str/index-of @backup-script "restore check restored no tables")
+        upload (str/index-of @backup-script "rclone copyto")]
+    (is (< restore upload))))
