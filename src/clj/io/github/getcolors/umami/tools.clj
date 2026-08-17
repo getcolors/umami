@@ -126,11 +126,36 @@
        :host-key-checking false}
       (ansible-specs opts))))
 
-(defn run-json [args timeout]
-  (let [r (process/run-with-timeout args {} timeout)]
-    (if (zero? (:exit r))
-      [(try (json/parse-string (:out r) true) (catch Exception _ nil)) nil]
-      [nil (str (:err r) (:out r))])))
+;; --- Acceptance --------------------------------------------------------------
+;;
+;; Every claim this step reports must be one it checked. TLS is verified (never
+;; `curl -k`), an ingested event is read back out of PostgreSQL rather than
+;; inferred from a status code, and the backup drill is confirmed by a fresh
+;; object in R2 rather than by systemd reporting that it started something.
+
+(defn http-status [args]
+  (let [r (process/run-with-timeout
+           (into ["curl" "-sS" "-o" "/dev/null" "-w" "%{http_code}"] args) {} 20000)]
+    (when (zero? (:exit r)) (str/trim (:out r)))))
+
+(defn ssh-out [ip command timeout]
+  (let [r (process/run-with-timeout
+           ["ssh" "-o" "StrictHostKeyChecking=no" "-o" "ConnectTimeout=10"
+            (str "root@" ip) command] {} timeout)]
+    (when (zero? (:exit r)) (str/trim (:out r)))))
+
+(defn sql [opts ip query]
+  (not-empty
+   (str (ssh-out ip (str "cd /opt/umami && docker compose exec -T postgres psql -U "
+                         (:postgres-user opts) " -d " (:postgres-db opts)
+                         " -tAc '" query "'")
+                 30000))))
+
+(defn event-count [opts ip]
+  (some-> (sql opts ip "select count(*) from website_event") parse-long))
+
+(defn website-id [opts ip]
+  (sql opts ip "select website_id from website limit 1"))
 
 (defn wait-health [url attempts]
   (loop [n attempts]
@@ -139,60 +164,109 @@
             (pos? n) (do (Thread/sleep 5000) (recur (dec n)))
             :else false))))
 
-(defn send-synthetic-event [base host]
-  (try
-    (let [[login _] (run-json ["curl" "-fsS" "-X" "POST"
-                              "-H" "content-type: application/json"
-                              "--data" "{\"username\":\"admin\",\"password\":\"umami\"}"
-                              (str base "/api/auth/login")] 15000)
-          token (:token login)]
-      (when token
-        (let [[site _] (run-json ["curl" "-fsS" "-X" "POST"
-                                 "-H" (str "authorization: Bearer " token)
-                                 "-H" "content-type: application/json"
-                                 "--data" (json/generate-string {:name "benchmark" :domain host})
-                                 (str base "/api/websites")] 15000)
-              website-id (or (:id site)
-                             (let [[sites _] (run-json ["curl" "-fsS"
-                                                        "-H" (str "authorization: Bearer " token)
-                                                        (str base "/api/websites")] 15000)]
-                               (:id (first (or (:data sites) (if (sequential? sites) sites [sites]))))))]
-          (when website-id
-            (let [payload (json/generate-string
-                           {:type "event"
-                            :payload {:website website-id
-                                      :hostname host
-                                      :url "/benchmark"
-                                      :name "synthetic-test-event"}})
-                  r (process/run-with-timeout
-                     ["curl" "-fsS" "-X" "POST"
-                      "-H" "content-type: application/json"
-                      "-H" "User-Agent: Mozilla/5.0 (Benchmark Acceptance)"
-                      "--data" payload
-                      (str base "/api/send")] {} 15000)]
-              (zero? (:exit r)))))))
-    (catch Exception _ false)))
+(defn default-admin-active?
+  "Umami seeds admin/umami. A deployment that still answers to it is not one
+   whose acceptance may pass."
+  [base]
+  (= "200" (http-status ["-X" "POST" "-H" "content-type: application/json"
+                         "--data" "{\"username\":\"admin\",\"password\":\"umami\"}"
+                         (str base "/api/auth/login")])))
 
-(defn run-backup-check [ip]
-  (let [r (process/run-with-timeout
-           ["ssh" "-o" "StrictHostKeyChecking=no" "-o" "ConnectTimeout=10"
-            (str "root@" ip) "systemctl start umami-backup.service && systemctl is-active umami-backup.timer"]
-           {} 30000)]
-    (zero? (:exit r))))
+(defn send-event [base host website]
+  (http-status ["-X" "POST" "-H" "content-type: application/json"
+                "-H" "User-Agent: Mozilla/5.0 (Colors acceptance)"
+                "--data" (json/generate-string
+                          {:type "event"
+                           :payload {:website website :hostname host
+                                     :url "/colors-acceptance"
+                                     :name "colors-acceptance"}})
+                (str base "/api/send")]))
+
+(defn ingestion-verdict [status before after]
+  (cond (nil? status) :unreachable
+        (and (integer? before) (integer? after) (> after before)) :ingested
+        (re-matches #"2\d\d" (str status)) :dropped
+        :else :rejected))
+
+(defn wait-ingested [opts ip baseline attempts]
+  (loop [n attempts]
+    (let [after (event-count opts ip)]
+      (cond (and (integer? after) (> after baseline)) after
+            (pos? n) (do (Thread/sleep 3000) (recur (dec n)))
+            :else after))))
+
+(def rclone-env
+  (str "RCLONE_CONFIG_R2_TYPE=s3 RCLONE_CONFIG_R2_PROVIDER=Cloudflare "
+       "RCLONE_CONFIG_R2_REGION=auto RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true"))
+
+(defn backup-listing
+  "Objects under this profile's prefix, listed on the droplet with the
+   credentials the backup unit already holds."
+  [opts ip]
+  (some-> (ssh-out ip (str "set -a; . /etc/umami-backup.env; set +a; " rclone-env
+                           " RCLONE_CONFIG_R2_ACCESS_KEY_ID=\"$BACKUP_R2_ACCESS_KEY_ID\""
+                           " RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=\"$BACKUP_R2_SECRET_ACCESS_KEY\""
+                           " RCLONE_CONFIG_R2_ENDPOINT=\"" (:backup-r2-endpoint opts) "\""
+                           " rclone lsjson --files-only r2:" (:backup-r2-bucket opts)
+                           "/" (:profile opts))
+                   120000)
+          not-empty
+          (json/parse-string true)))
+
+(defn parse-instant [s]
+  (try (.toInstant (java.time.OffsetDateTime/parse (str s))) (catch Exception _ nil)))
+
+(defn fresh-backup? [entries since]
+  (boolean (some (fn [{:keys [Size ModTime]}]
+                   (and (pos? (or Size 0))
+                        (when-let [t (parse-instant ModTime)]
+                          (not (.isBefore t since)))))
+                 entries)))
+
+(defn run-backup [ip]
+  (ssh-out ip "systemctl start umami-backup.service && systemctl is-active umami-backup.timer"
+           300000))
 
 (defn acceptance-step [opts]
   (if (not= :create (:green/event opts))
     (assoc opts :green/exit 0)
-    (let [base (str "https://" (:umami-host opts))]
+    (let [base (str "https://" (:umami-host opts))
+          ip (:ip opts)
+          since (.minusSeconds (java.time.Instant/now) 120)]
       (cond
         (not (wait-health base 60))
-        (assoc opts :green/exit 1 :green/err "HTTPS heartbeat endpoint did not become ready")
+        (assoc opts :green/exit 1
+               :green/err "HTTPS heartbeat did not become ready with a valid certificate")
 
-        (not (send-synthetic-event base (:umami-host opts)))
-        (assoc opts :green/exit 1 :green/err "Synthetic event ingestion via /api/send failed")
-
-        (not (run-backup-check (:ip opts)))
-        (assoc opts :green/exit 1 :green/err "Backup service check failed on droplet")
+        (default-admin-active? base)
+        (assoc opts :green/exit 1
+               :green/err "the seeded admin/umami credentials still authenticate; rotate them")
 
         :else
-        (assoc opts :green/exit 0 :umami/acceptance {:health "ok" :event "ingested" :backup "verified"})))))
+        (let [website (website-id opts ip)
+              before (event-count opts ip)]
+          (if-not (integer? before)
+            (assoc opts :green/exit 1
+                   :green/err "could not read website_event from PostgreSQL to verify ingestion")
+            (let [verdict (if-not website
+                            :not-configured
+                            (let [status (send-event base (:umami-host opts) website)
+                                  after (wait-ingested opts ip before 10)]
+                              (ingestion-verdict status before after)))]
+              (cond
+                (contains? #{:dropped :rejected :unreachable} verdict)
+                (assoc opts :green/exit 1
+                       :green/err (str "synthetic event was not ingested: " (name verdict)))
+
+                (nil? (run-backup ip))
+                (assoc opts :green/exit 1 :green/err "backup unit or timer is not healthy")
+
+                (not (fresh-backup? (backup-listing opts ip) since))
+                (assoc opts :green/exit 1
+                       :green/err (str "no backup object newer than this run under r2:"
+                                       (:backup-r2-bucket opts) "/" (:profile opts)))
+
+                :else
+                (assoc opts :green/exit 0
+                       :umami/acceptance {:health :ok :default-admin :rejected
+                                          :event verdict :backup :verified-in-r2})))))))))
