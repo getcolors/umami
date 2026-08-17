@@ -52,7 +52,13 @@
                     [:provider-backend (:provider-backend opts)])))
 
 (defn secret-errors [opts]
-  (let [keys (concat [:do-token :cloudflare-api-token]
+  (let [keys (concat [:do-token :cloudflare-api-token :postgres-password]
+                     ;; The compose template interpolates these at run time and
+                     ;; carries no fallback, so an unset value would silently
+                     ;; render an empty password or signing key.
+                     (when (and (missing? (:app-secret-key opts))
+                                (missing? (:umami-app-secret opts)))
+                       [:app-secret-key])
                      (when (and (missing? (:backup-r2-access-key-id opts))
                                 (missing? (:umami-backup-r2-access-key-id opts))
                                 (missing? (:r2-access-key-id opts)))

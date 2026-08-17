@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_DB: umami
       POSTGRES_USER: umami
-      POSTGRES_PASSWORD: "{{ lookup('env','COLORS_PAR_POSTGRES_PASSWORD') | default('umami', true) }}"
+      POSTGRES_PASSWORD: "{{ lookup('env','COLORS_PAR_POSTGRES_PASSWORD') }}"
     volumes:
       - /var/lib/umami/postgres:/var/lib/postgresql/data
     healthcheck:
@@ -19,9 +19,11 @@ services:
     image: ghcr.io/umami-software/umami:postgresql-v2.14.0
     restart: unless-stopped
     environment:
-      DATABASE_URL: "postgresql://umami:{{ lookup('env','COLORS_PAR_POSTGRES_PASSWORD') | default('umami', true) }}@postgres:5432/umami"
+      # urlencode leaves "/" alone, which would terminate the authority and
+      # silently truncate the password, so encode it explicitly.
+      DATABASE_URL: "postgresql://umami:{{ lookup('env','COLORS_PAR_POSTGRES_PASSWORD') | urlencode | replace('/', '%2F') }}@postgres:5432/umami"
       DATABASE_TYPE: postgresql
-      APP_SECRET: "{{ lookup('env','COLORS_PAR_APP_SECRET_KEY') | default(lookup('env','COLORS_PAR_UMAMI_APP_SECRET') | default('umami_secret_hash_key_63829104829104', true), true) }}"
+      APP_SECRET: "{{ lookup('env','COLORS_PAR_APP_SECRET_KEY') | default(lookup('env','COLORS_PAR_UMAMI_APP_SECRET'), true) }}"
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
     depends_on:

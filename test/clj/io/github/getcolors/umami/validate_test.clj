@@ -33,5 +33,18 @@
     (doseq [name ["COLORS_PAR_DO_TOKEN" "COLORS_PAR_CLOUDFLARE_API_TOKEN"
                   "COLORS_PAR_R2_ACCESS_KEY_ID" "COLORS_PAR_R2_SECRET_ACCESS_KEY"
                   "COLORS_PAR_BACKUP_R2_ACCESS_KEY_ID"
-                  "COLORS_PAR_BACKUP_R2_SECRET_ACCESS_KEY"]]
+                  "COLORS_PAR_BACKUP_R2_SECRET_ACCESS_KEY"
+                  "COLORS_PAR_POSTGRES_PASSWORD" "COLORS_PAR_APP_SECRET_KEY"]]
       (is (str/includes? errors name)))))
+
+(deftest accepts-the-alternate-app-secret-name
+  (let [errors (str/join "\n" (validate/secret-errors
+                               (assoc (fixture) :umami-app-secret "alternate")))]
+    (is (not (str/includes? errors "COLORS_PAR_APP_SECRET_KEY")))))
+
+(deftest compose-template-carries-no-default-credential
+  (let [compose (slurp "src/resources/io/github/getcolors/umami/tools/ansible/compose.yml")]
+    (is (not (str/includes? compose "default('umami'")))
+    (is (not (re-find #"(?i)secret_hash_key" compose)))
+    ;; The password reaches Umami inside a URL, so it must be percent-encoded.
+    (is (str/includes? compose "urlencode | replace('/', '%2F')"))))
