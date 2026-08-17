@@ -112,3 +112,13 @@
         reload (str/index-of @playbook "--force-recreate caddy")
         health (str/index-of @playbook "Wait for Umami health endpoint")]
     (is (< converge reload health))))
+
+(deftest access-log-records-the-visitor-not-the-proxy
+  ;; Behind the Cloudflare proxy every connection arrives from an edge address,
+  ;; so without trusted_proxies Caddy attributes each request to Cloudflare and
+  ;; the access log answers "who sent this?" with the proxy. Verified against a
+  ;; live deployment: the arm with this block logged the real client address
+  ;; and the arm without it logged 162.158.x.
+  (is (str/includes? @caddyfile "trusted_proxies static"))
+  (is (str/includes? @caddyfile "162.158.0.0/15"))
+  (is (str/includes? @caddyfile "2400:cb00::/32")))
