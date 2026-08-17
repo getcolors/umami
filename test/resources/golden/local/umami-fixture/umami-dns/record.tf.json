@@ -4,7 +4,7 @@
       "umami" : {
         "content" : "192.0.2.10",
         "name" : "umami.example.com",
-        "proxied" : false,
+        "proxied" : true,
         "ttl" : 1,
         "type" : "A",
         "zone_id" : "${data.cloudflare_zone.zone.id}"

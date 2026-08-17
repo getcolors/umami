@@ -20,7 +20,11 @@
                :backup-oncalendar "*-*-* 03:00:00"
                :backup-retention-days 7
                :caddy-image "caddy:2.11.4"
-               :cloudflare-proxied false})
+               ;; Proxied by default: an unproxied record publishes the
+               ;; droplet's address. Note this map is the effective default --
+               ;; it seeds the key, so tools/dns-data always sees it supplied
+               ;; and its own fallback never runs. Both have to agree.
+               :cloudflare-proxied true})
 
 (defn state-output [opts]
   (try (some-> (tofu/outputs (tools/tool-dir opts tools/infrastructure-tool)

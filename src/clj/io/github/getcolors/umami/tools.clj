@@ -77,9 +77,12 @@
     (assoc opts
            :ip (or (:ip opts) (:ip (fallback-params opts)))
            :cloudflare-zone zone
+           ;; Kept in step with the workflow defaults, which seed this key and
+           ;; therefore decide it on the real path -- this fallback only runs
+           ;; when dns-data is called with bare opts, as the tests do.
            :cloudflare-proxied (if (some? (:cloudflare-proxied opts))
                                  (:cloudflare-proxied opts)
-                                 false))))
+                                 true))))
 
 (defn dns-json [opts]
   (tofu/constructs-json

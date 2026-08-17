@@ -11,7 +11,15 @@
 (deftest dns-computes-zone-and-record
   (let [json (tools/dns-json (tools/dns-data (assoc (fixture) :ip "192.0.2.10")))]
     (is (str/includes? json "umami.example.com"))
-    (is (str/includes? json "192.0.2.10"))))
+    (is (str/includes? json "192.0.2.10"))
+    (is (str/includes? json "\"proxied\" : true"))))
+
+(deftest dns-proxying-defaults-on-and-can-be-declined
+  (is (true? (:cloudflare-proxied (tools/dns-data (fixture)))))
+  (is (str/includes? (tools/dns-json
+                      (tools/dns-data (assoc (fixture) :ip "192.0.2.10"
+                                             :cloudflare-proxied false)))
+                     "\"proxied\" : false")))
 
 (deftest inventory-keeps-one-target
   (let [inventory (tools/inventory (assoc (fixture) :ip "192.0.2.10"))]

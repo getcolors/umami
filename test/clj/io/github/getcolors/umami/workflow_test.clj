@@ -27,3 +27,10 @@
          (vec (rest (workflow/wire-fn :umami/infrastructure {:green/event :create})))))
   (is (= [:umami/ansible]
          (vec (rest (workflow/wire-fn :umami/start {:green/event :delete}))))))
+
+(deftest proxying-default-lives-here-not-only-in-dns-data
+  ;; This map seeds :cloudflare-proxied, so tools/dns-data always sees the key
+  ;; supplied and its own fallback never runs on the real path. Flipping only
+  ;; the fallback would change nothing and move no golden -- assert the value
+  ;; that actually decides it.
+  (is (true? (:cloudflare-proxied workflow/defaults))))

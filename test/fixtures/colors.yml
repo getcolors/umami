@@ -58,7 +58,9 @@ digitalocean-https-sources:
 
 cloudflare-zone: example.com
 cloudflare-record-name: umami
-cloudflare-proxied: false
+# cloudflare-proxied is deliberately absent: the fixture should exercise the
+# default a real deployment gets, and pinning it here hid that the default was
+# to publish the droplet's address. The opt-out is covered by its own test.
 
 # --- OpenTofu State Backend --------------------------------------------------
 
