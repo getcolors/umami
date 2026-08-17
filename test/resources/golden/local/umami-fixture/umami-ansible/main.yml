@@ -1,0 +1,95 @@
+---
+- name: Install production single-node Umami
+  hosts: umami
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - ansible.builtin.wait_for_connection: {connect_timeout: 10, delay: 5, sleep: 5, timeout: 600}
+    - ansible.builtin.setup:
+  tasks:
+    - name: Install Docker and backup tooling
+      ansible.builtin.apt:
+        name: [docker.io, docker-compose-v2, rclone, ca-certificates, curl]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - ansible.builtin.systemd_service: {name: docker, enabled: true, state: started}
+    - ansible.builtin.file: {path: /opt/umami, state: directory, mode: "0755"}
+    - ansible.builtin.file: {path: "/var/lib/umami/postgres", state: directory, mode: "0755"}
+    - ansible.builtin.file: {path: "/var/backups/umami", state: directory, mode: "0700"}
+    - name: Install stack configuration
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "{{ item.mode | default('0644') }}"
+      loop:
+        - {src: compose.yml, dest: /opt/umami/compose.yml}
+        - {src: Caddyfile, dest: /opt/umami/Caddyfile}
+        - {src: backup, dest: /usr/local/sbin/umami-backup, mode: "0700"}
+      notify: Restart Umami stack
+    - name: Install backup credentials outside generated and tracked files
+      ansible.builtin.copy:
+        dest: /etc/umami-backup.env
+        mode: "0600"
+        content: |
+          BACKUP_R2_ACCESS_KEY_ID={{ lookup('env','COLORS_PAR_BACKUP_R2_ACCESS_KEY_ID') | default(lookup('env','COLORS_PAR_UMAMI_BACKUP_R2_ACCESS_KEY_ID') | default(lookup('env','COLORS_PAR_R2_ACCESS_KEY_ID'), true), true) }}
+          BACKUP_R2_SECRET_ACCESS_KEY={{ lookup('env','COLORS_PAR_BACKUP_R2_SECRET_ACCESS_KEY') | default(lookup('env','COLORS_PAR_UMAMI_BACKUP_R2_SECRET_ACCESS_KEY') | default(lookup('env','COLORS_PAR_R2_SECRET_ACCESS_KEY'), true), true) }}
+      no_log: true
+    - name: Install backup service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/umami-backup.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Consistent Umami PostgreSQL backup
+          Requires=docker.service
+          After=docker.service
+          [Service]
+          Type=oneshot
+          EnvironmentFile=/etc/umami-backup.env
+          ExecStart=/usr/local/sbin/umami-backup
+      notify: Reload systemd
+    - name: Install backup timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/umami-backup.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Scheduled Umami backup
+          [Timer]
+          OnCalendar=*-*-* 03:00:00
+          Persistent=true
+          RandomizedDelaySec=300
+          [Install]
+          WantedBy=timers.target
+      notify: Reload systemd
+    - ansible.builtin.meta: flush_handlers
+    - name: Build and converge pinned containers
+      ansible.builtin.command: docker compose up -d --remove-orphans
+      args: {chdir: /opt/umami}
+      register: compose_up
+      changed_when: "'Created' in (compose_up.stdout + compose_up.stderr) or 'Recreated' in (compose_up.stdout + compose_up.stderr) or 'Starting' in (compose_up.stdout + compose_up.stderr)"
+    - ansible.builtin.systemd_service: {name: umami-backup.timer, enabled: true, state: started}
+    - name: Wait for Umami health endpoint inside its container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - exec
+          - -T
+          - umami
+          - node
+          - -e
+          - "fetch('http://127.0.0.1:3000/api/heartbeat').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
+      args: {chdir: /opt/umami}
+      register: local_health
+      changed_when: false
+      retries: 60
+      delay: 5
+      until: local_health.rc == 0
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd_service: {daemon_reload: true}
+    - name: Restart Umami stack
+      ansible.builtin.command: docker compose up -d --remove-orphans
+      args: {chdir: /opt/umami}

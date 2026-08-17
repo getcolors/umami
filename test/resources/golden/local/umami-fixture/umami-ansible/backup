@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /opt/umami
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p /var/backups/umami
+docker compose exec -T postgres pg_dump -U umami umami | gzip > "/var/backups/umami/umami-$stamp.sql.gz"
+RCLONE_CONFIG_R2_TYPE=s3 \
+RCLONE_CONFIG_R2_PROVIDER=Cloudflare \
+RCLONE_CONFIG_R2_REGION=auto \
+RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true \
+RCLONE_CONFIG_R2_ACCESS_KEY_ID="$BACKUP_R2_ACCESS_KEY_ID" \
+RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$BACKUP_R2_SECRET_ACCESS_KEY" \
+RCLONE_CONFIG_R2_ENDPOINT="https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com" \
+rclone copyto "/var/backups/umami/umami-$stamp.sql.gz" \
+  "r2:umami-backup/umami-fixture/umami-$stamp.sql.gz"
+find /var/backups/umami -type f -name 'umami-*.sql.gz' -mtime +7 -delete

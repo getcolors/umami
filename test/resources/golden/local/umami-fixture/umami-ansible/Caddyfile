@@ -1,0 +1,9 @@
+umami.example.com {
+  encode zstd gzip
+  reverse_proxy umami:3000
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "no-referrer-when-downgrade"
+  }
+}

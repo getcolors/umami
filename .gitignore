@@ -1,0 +1,5 @@
+.colors/
+.cpcache/
+.devenv/
+.direnv/
+.envrc.private

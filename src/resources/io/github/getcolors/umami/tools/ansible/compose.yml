@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: <{ postgres-image }>
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: <{ postgres-db }>
+      POSTGRES_USER: <{ postgres-user }>
+      POSTGRES_PASSWORD: "{{ lookup('env','COLORS_PAR_POSTGRES_PASSWORD') | default('umami', true) }}"
+    volumes:
+      - <{ postgres-data-dir }>:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U <{ postgres-user }> -d <{ postgres-db }>"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  umami:
+    image: <{ umami-image }>
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql://<{ postgres-user }>:{{ lookup('env','COLORS_PAR_POSTGRES_PASSWORD') | default('umami', true) }}@postgres:5432/<{ postgres-db }>"
+      DATABASE_TYPE: postgresql
+      APP_SECRET: "{{ lookup('env','COLORS_PAR_APP_SECRET_KEY') | default(lookup('env','COLORS_PAR_UMAMI_APP_SECRET') | default('umami_secret_hash_key_63829104829104', true), true) }}"
+      PORT: "<{ umami-port }>"
+      HOSTNAME: "0.0.0.0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+
+  caddy:
+    image: <{ caddy-image }>
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [umami]
+    networks: [internal]
+
+networks:
+  internal:
+    internal: false
+volumes:
+  caddy-data:
+  caddy-config:
