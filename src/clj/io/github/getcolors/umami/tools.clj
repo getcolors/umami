@@ -140,19 +140,38 @@
             :else false))))
 
 (defn send-synthetic-event [base host]
-  (let [payload (json/generate-string
-                 {:type "event"
-                  :payload {:website "00000000-0000-0000-0000-000000000000"
-                            :hostname host
-                            :url "/benchmark"
-                            :name "synthetic-test-event"}})
-        r (process/run-with-timeout
-           ["curl" "-fsS" "-X" "POST"
-            "-H" "content-type: application/json"
-            "-H" "User-Agent: Mozilla/5.0 (Benchmark Acceptance)"
-            "--data" payload
-            (str base "/api/send")] {} 15000)]
-    (zero? (:exit r))))
+  (try
+    (let [[login _] (run-json ["curl" "-fsS" "-X" "POST"
+                              "-H" "content-type: application/json"
+                              "--data" "{\"username\":\"admin\",\"password\":\"umami\"}"
+                              (str base "/api/auth/login")] 15000)
+          token (:token login)]
+      (when token
+        (let [[site _] (run-json ["curl" "-fsS" "-X" "POST"
+                                 "-H" (str "authorization: Bearer " token)
+                                 "-H" "content-type: application/json"
+                                 "--data" (json/generate-string {:name "benchmark" :domain host})
+                                 (str base "/api/websites")] 15000)
+              website-id (or (:id site)
+                             (let [[sites _] (run-json ["curl" "-fsS"
+                                                        "-H" (str "authorization: Bearer " token)
+                                                        (str base "/api/websites")] 15000)]
+                               (:id (first (or (:data sites) (if (sequential? sites) sites [sites]))))))]
+          (when website-id
+            (let [payload (json/generate-string
+                           {:type "event"
+                            :payload {:website website-id
+                                      :hostname host
+                                      :url "/benchmark"
+                                      :name "synthetic-test-event"}})
+                  r (process/run-with-timeout
+                     ["curl" "-fsS" "-X" "POST"
+                      "-H" "content-type: application/json"
+                      "-H" "User-Agent: Mozilla/5.0 (Benchmark Acceptance)"
+                      "--data" payload
+                      (str base "/api/send")] {} 15000)]
+              (zero? (:exit r)))))))
+    (catch Exception _ false)))
 
 (defn run-backup-check [ip]
   (let [r (process/run-with-timeout
