@@ -1,26 +1,21 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["package-umami-blue", "blue", "package-once-blue"]
+#
+# [tool.uv.sources]
+# package-umami-blue = { git = "https://github.com/getcolors/umami.git", rev = "36b40842d35a84c65ffc64f0e963a7f40e7ba6f9", subdirectory = "blue" }
+# blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
+# package-once-blue = { git = "https://github.com/getcolors/once.git", subdirectory = "blue", rev = "69527114b8bd1ead0b92dc1b08e6bf9a446c341a" }
+#
+# [tool.uv]
+# override-dependencies = ["blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09"]
 # ///
 #
 # Managed by `bb pin` — do not edit by hand, and never invent a SHA.
 #
-# UNPINNED: this repository has not been pushed and stamped, so the inline
-# metadata above deliberately carries no package-umami-blue git source. A
-# launcher that cannot resolve its own library says so rather than inventing a
-# SHA or silently falling back to whatever is lying around; `bb pin` refuses to
-# stamp a dirty or unpushed HEAD for the same reason. Once stamped, the block
-# above reads:
-#
-#   # dependencies = ["package-umami-blue", "blue", "package-once-blue"]
-#   #
-#   # [tool.uv.sources]
-#   # package-umami-blue = { git = "https://github.com/getcolors/umami.git", rev = "<sha stamped by bb pin>", subdirectory = "blue" }
-#   # blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
-#   # package-once-blue = { git = "https://github.com/getcolors/once.git", subdirectory = "blue", rev = "69527114b8bd1ead0b92dc1b08e6bf9a446c341a" }
-#
-# Point it at a checkout meanwhile: UMAMI_LIB_ROOT=/path/to/umami
+# Stamped by `bb pin`. UMAMI_LIB_ROOT=/path/to/umami still overrides the
+# pin with a working tree.
 """Thin launcher for package-umami-blue.
 
 This file is both the skill payload and the repository entry point —
