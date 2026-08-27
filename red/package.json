@@ -1,0 +1,17 @@
+{
+  "name": "package-umami-red-dev",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "package-once-red": "github:getcolors/once#69527114b8bd1ead0b92dc1b08e6bf9a446c341a",
+    "red": "github:getcolors/red#db9bfe61282e2093f4098bf5a6ee0cd10added6e"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^7.0.2"
+  }
+}

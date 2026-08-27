@@ -3,3 +3,8 @@
 .devenv/
 .direnv/
 .envrc.private
+.pytest_cache/
+.venv/
+node_modules/
+__pycache__/
+*.pyc

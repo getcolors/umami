@@ -11,8 +11,8 @@
 ;; cloud resources, and overriding it from the environment can only point umami
 ;; at another project's state.
 ;;
-;; This file is both the skill payload and the repository entry point — ./green
-;; in the project root is a symlink to it. It deliberately holds no logic of its
+;; This file is both the skill payload and the repository entry point — green/green
+;; in the repository is a symlink to it. It deliberately holds no logic of its
 ;; own: validation, the graph and the steps all live in the `umami` library,
 ;; where the test suite reaches them. A copied payload is the one place in this
 ;; project where code cannot be tested, so nothing that can live elsewhere
@@ -33,10 +33,11 @@
 ;;
 ;; Nothing in this stack is published to Clojars, so a standalone copy of this
 ;; launcher resolves `umami` as an immutable git dependency and lets tools.deps
-;; pull `green` transitively from umami's own deps.edn. When the classpath
-;; already provides umami — running inside the project, where bb.edn supplies a
-;; local root — bootstrap is skipped. UMAMI_LIB_ROOT, GREEN_LIB_ROOT, and
-;; ONCE_LIB_ROOT override immutable dependencies with working trees.
+;; pull `green` and `once` transitively from umami's own green/deps.edn. When
+;; the classpath already provides umami — running inside the project, where
+;; bb.edn supplies a local root — bootstrap is skipped. UMAMI_LIB_ROOT,
+;; GREEN_LIB_ROOT, and ONCE_LIB_ROOT override immutable dependencies with
+;; working trees.
 
 (def ^:private launcher-contract
   "Minimum io.github.getcolors.umami contract this launcher requires. Guarded at
@@ -50,7 +51,7 @@
 ;; cannot resolve its own library says so rather than inventing a SHA or
 ;; silently falling back to whatever is lying around. `bb pin` refuses to stamp
 ;; a dirty or unpushed HEAD for the same reason.
-(def ^:private umami-sha "178d87f5fc262e8325ed4e5b98425ceb964f10d0")
+(def ^:private umami-sha nil)
 
 (def ^:private umami-git-url "https://github.com/getcolors/umami.git")
 (def ^:private green-git-url "https://github.com/getcolors/green.git")
@@ -69,7 +70,7 @@
 
 (def ^:private bootstrap-error
   (when (and (System/getProperty "babashka.version") (not resolved?))
-    (let [umami (lib-coord "UMAMI_LIB_ROOT" umami-git-url umami-sha nil)
+    (let [umami (lib-coord "UMAMI_LIB_ROOT" umami-git-url umami-sha "green")
           green (lib-coord "GREEN_LIB_ROOT" green-git-url nil nil)
           once (lib-coord "ONCE_LIB_ROOT" once-git-url nil "green")]
       (if-not umami
@@ -109,6 +110,10 @@
        :green/err (str "this launcher requires umami contract " launcher-contract
                        " but resolved " resolved "\n"
                        (if umami-sha
+                         ;; `take` rather than `subs`: umami-sha is nil until
+                         ;; `bb pin` stamps it, and a launcher that threw while
+                         ;; explaining why it could not start would be worse
+                         ;; than useless.
                          (str "the pinned commit " (apply str (take 7 umami-sha))
                               " predates this launcher; update the skill or repin")
                          "no umami library could be resolved")

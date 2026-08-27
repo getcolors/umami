@@ -1,8 +1,9 @@
 # Umami Package Skill
 
-A reproducible [Colors](https://www.getcolors.ai) Package Skill for single-node
-[Umami](https://umami.is) web analytics on DigitalOcean with origin TLS via Caddy,
-Cloudflare DNS, and disaster recovery via scheduled R2 backups.
+A reproducible [Colors](https://www.getcolors.ai) tri-colour Package Skill
+(green, red, blue) for single-node [Umami](https://umami.is) web analytics on
+DigitalOcean with origin TLS via Caddy, Cloudflare DNS, and disaster recovery
+via scheduled R2 backups.
 
 ## Architecture
 
@@ -22,12 +23,23 @@ chmod +x green
 ./green create --dry-run
 ```
 
-## Commands
+The same deployment can run through the TypeScript (`package-umami-red`) or
+Python (`package-umami-blue`) implementation — all three render byte-identical
+artifacts from one `colors.yml`.
+
+`build` and `create --dry-run` need no credentials and contact nothing, which
+makes them the safe way to check a `colors.yml` edit.
+
+## Development
 
 ```sh
-bb test                        # run clojure test suite
-bb golden                      # verify rendered golden templates
-./scripts/launcher.sh          # test package launcher
-./green build                  # render workdir (.colors/)
-./green create --dry-run       # walk DAG without provider calls
+cd green && bb test      # unit tests (canonical Clojure implementation)
+cd green && bb golden    # render the fixture and diff against committed output
+cd red && bun test && bun run typecheck   # TypeScript implementation
+cd blue && uv run pytest                  # Python implementation
+./scripts/parity.sh      # all three colours render byte-identical trees
+./scripts/launcher.sh    # launcher payload and profile-guard checks
 ```
+
+Point the launchers at working trees with `UMAMI_LIB_ROOT`, `GREEN_LIB_ROOT`
+and `ONCE_LIB_ROOT`.

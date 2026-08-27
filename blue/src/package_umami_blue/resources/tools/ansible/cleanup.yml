@@ -1,0 +1,11 @@
+---
+- name: Stop Umami application services before infrastructure deletion
+  hosts: umami
+  become: true
+  gather_facts: false
+  tasks:
+    - ansible.builtin.command: docker compose down
+      args: {chdir: /opt/umami}
+      register: compose_down
+      changed_when: "'Removed' in (compose_down.stderr + compose_down.stdout)"
+      failed_when: false

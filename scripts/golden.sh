@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Green's regression net against the committed goldens: render the fixture and
+# diff against committed output. scripts/parity.sh is the net across colours.
+#
+#   ./scripts/golden.sh            check
+#   ./scripts/golden.sh --accept   regenerate after an intended change
+
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 fixture="$tmp/colors.yml"
 sed "s#WORKDIR#$tmp/work#" "$root/test/fixtures/colors.yml" > "$fixture"
-UMAMI_LIB_ROOT="$root" "$root/green" build -f "$fixture" >/dev/null
+(cd "$root/green" && UMAMI_LIB_ROOT="$root" ./green build -f "$fixture" >/dev/null)
 actual="$tmp/work/umami-fixture"
 golden="$root/test/resources/golden/local/umami-fixture"
 # No rendered artefact may carry a real secret into a committed golden. Checked
