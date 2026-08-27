@@ -13,9 +13,9 @@
 <script src="https://rybbit.getcolors.ai/api/script.js" data-site-id="9fb9c41a6d49" defer></script>
 </head>
 <body><main>
-  <p class="eyebrow">GREEN PACKAGE SKILL · DIGITALOCEAN · UMAMI</p>
+  <p class="eyebrow">GREEN · RED · BLUE PACKAGE SKILL · DIGITALOCEAN · UMAMI</p>
   <h1>Umami Package Skill</h1>
-  <p class="lead">A reproducible Green workflow for one production-oriented Umami web analytics server: pinned Umami and PostgreSQL 17 behind Caddy, Cloudflare DNS and TLS, rotated credentials, and a nightly backup that proves it can be restored before it is uploaded.</p>
+  <p class="lead">A reproducible Green, Red, and Blue workflow for one production-oriented Umami web analytics server: pinned Umami and PostgreSQL 17 behind Caddy, Cloudflare DNS and TLS, rotated credentials, and a nightly backup that proves it can be restored before it is uploaded.</p>
 
   <div class="callout"><strong>The seeded administrator password is rotated during convergence.</strong> Umami ships with <code>admin</code>/<code>umami</code> and offers no way to set it from the environment, so a fresh server is reachable on the public internet with a published password until something changes it. This package changes it, and acceptance fails if the seeded credentials still authenticate.</div>
 
@@ -25,6 +25,7 @@ cp .agents/skills/package-umami-green/green ./green
 chmod +x green
 ./green build
 ./green create --dry-run</code></pre>
+<p>Equivalent Red and Blue skills ship <code>red</code> and <code>blue</code> launchers.</p>
   <p><code>build</code> renders the deployment without credentials. The dry-run walks the whole workflow while skipping every side effect. A real <code>create</code> or <code>delete</code> touches live infrastructure and requires separate authorization.</p>
 
   <h2>Architecture and sizing</h2>
