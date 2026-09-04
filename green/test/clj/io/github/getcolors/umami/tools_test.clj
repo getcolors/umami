@@ -2,8 +2,16 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [green.ansible :as ansible]
+            [green.scaffold :as sc]
             [io.github.getcolors.umami.tools :as tools]
-            [io.github.getcolors.umami.validate-test :refer [fixture]]))
+            [io.github.getcolors.umami.validate-test :refer [fixture keygen]]))
+
+(defn- render-infrastructure
+  "The compute template for `opts`' provider, rendered as `build` would."
+  [opts]
+  (sc/render-template (tools/template (str "infrastructure." (:provider-compute opts)) "main.tf")
+                      (tools/infrastructure-data opts)
+                      tools/template-opts))
 
 (deftest delete-cleanup-skips-when-state-has-no-compute
   ;; With the instance already gone the inventory would render 192.0.2.10;
@@ -25,7 +33,66 @@
 
 (deftest infrastructure-discovers-default-vpc
   (let [data (tools/infrastructure-data (fixture))]
-    (is (= ["0.0.0.0/0" "::/0"] (tools/cidrs data :digitalocean-http-sources)))))
+    (is (= ["0.0.0.0/0" "::/0"] (tools/cidrs data :digitalocean-http-sources)))
+    (is (str/includes? (:http-sources-hcl data) "0.0.0.0/0"))))
+
+(deftest hostname-is-provider-neutral
+  ;; The playbook used digitalocean-name, which renders empty without the
+  ;; override; the resolved name is what every label derives from.
+  (is (= "umami-fixture" (tools/compute-name (fixture))))
+  (is (= "umami-fixture" (tools/compute-name (fixture :digitalocean-name nil))))
+  (is (str/includes? (slurp "src/resources/io/github/getcolors/umami/tools/ansible/main.yml")
+                     "<{ compute-name }>")))
+
+(deftest infrastructure-data-carries-the-name-and-the-keypair-mode
+  ;; One resolved name and one mode reach every template, so no template
+  ;; branches on the provider or re-derives either.
+  (let [data (tools/infrastructure-data (fixture))]
+    (is (= "umami-fixture" (:compute-name data)))
+    (is (false? (:ssh-keygen data))))
+  (let [data (tools/infrastructure-data (keygen))]
+    (is (= "umami-keygen-fixture" (:compute-name data)))
+    (is (true? (:ssh-keygen data))))
+  (is (true? (:ssh-keygen (tools/ansible-data (keygen)))))
+  (is (false? (:ssh-keygen (tools/ansible-data (fixture))))))
+
+(deftest templates-name-the-machine-from-one-resolved-value
+  ;; Every label -- droplet name, firewall name and params.name --
+  ;; interpolates compute-name, never a provider key or the profile directly,
+  ;; so an override and the fallback land everywhere at once.
+  (let [template (slurp "src/resources/io/github/getcolors/umami/tools/infrastructure/digitalocean/main.tf")]
+    (is (not (str/includes? template "<{ digitalocean-name }>")))
+    (is (str/includes? template "name     = \"<{ compute-name }>\""))
+    (is (str/includes? template "provider = \"digitalocean\"")))
+  (let [rendered (render-infrastructure (fixture :digitalocean-name "custom-label"))]
+    (is (str/includes? rendered "name     = \"custom-label\""))
+    (is (str/includes? rendered "name        = \"custom-label-firewall\""))
+    (is (str/includes? rendered "name = \"custom-label\""))))
+
+(deftest empty-http-sources-renders-no-public-http
+  ;; An empty `digitalocean-http-sources` is allowed and means no public HTTP:
+  ;; the 80/443 rules are a dynamic block over an empty list, because a rule
+  ;; with no source is an API error to DigitalOcean, not a closed port. SSH
+  ;; stays.
+  (let [rendered (render-infrastructure (fixture :digitalocean-http-sources []))]
+    (is (str/includes? rendered "length([]) > 0 ? ["))
+    (is (str/includes? rendered "source_addresses = []"))
+    (is (str/includes? rendered "port_range       = \"22\"")))
+  (let [rendered (render-infrastructure (fixture))]
+    (is (str/includes? rendered "length([\"0.0.0.0/0\", \"::/0\"]) > 0 ? ["))
+    (is (str/includes? rendered "{ protocol = \"tcp\", port_range = \"80\" }"))
+    (is (str/includes? rendered "{ protocol = \"tcp\", port_range = \"443\" }"))
+    (is (not (str/includes? rendered "udp\", port_range = \"443")))))
+
+(deftest keygen-mode-renders-the-key-resource-and-opt-out-keeps-the-literal
+  (let [generated (render-infrastructure (keygen))
+        opted-out (render-infrastructure (fixture))]
+    (is (str/includes? generated "resource \"digitalocean_ssh_key\" \"machine\""))
+    (is (str/includes? generated "ssh_keys = [digitalocean_ssh_key.machine.id]"))
+    (is (str/includes? generated "ssh_key_id = digitalocean_ssh_key.machine.id"))
+    (is (not (str/includes? opted-out "digitalocean_ssh_key")))
+    (is (str/includes? opted-out "ssh_keys = [\"58495393\"]"))
+    (is (not (str/includes? opted-out "ssh_key_id")))))
 
 (deftest dns-computes-zone-and-record
   (let [json (tools/dns-json (tools/dns-data (assoc (fixture) :ip "192.0.2.10")))]

@@ -24,11 +24,11 @@
        "# [tool.uv.sources]\n"
        "# package-umami-blue = { git = \"https://github.com/getcolors/umami.git\", rev = \"" sha "\", subdirectory = \"blue\" }\n"
        "# blue = { git = \"https://github.com/getcolors/blue.git\", rev = \"290f313ead5ca162875c33a049c880da017eae09\" }\n"
-       "# package-once-blue = { git = \"https://github.com/getcolors/once.git\", subdirectory = \"blue\", rev = \"69527114b8bd1ead0b92dc1b08e6bf9a446c341a\" }\n"
+       "# package-once-blue = { git = \"https://github.com/getcolors/once.git\", subdirectory = \"blue\", rev = \"38e3cd66674a32fb96605e1b17ae6791086ad5c1\" }\n"
        "#\n"
-       ;; package-once-blue at 6952711 carries its own, older blue pin
-       ;; (369c5aafea790a03b649b3513003651e672f3f57); the override makes this
-       ;; package's blue pin win, as it does in blue/pyproject.toml.
+       ;; package-once-blue at 38e3cd6 pins this same blue rev; the override is
+       ;; redundant but harmless and kept so the launcher and blue/pyproject.toml
+       ;; agree should ONCE ever pin an older blue again.
        "# [tool.uv]\n"
        "# override-dependencies = [\"blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09\"]\n"
        "# ///"))

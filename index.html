@@ -30,7 +30,7 @@ chmod +x green
 
   <h2>Architecture and sizing</h2>
   <div class="grid">
-    <div class="card"><h3>Compute</h3><p>OpenTofu discovers the configured region’s default VPC at plan time and creates one Ubuntu 24.04 Droplet plus a firewall. No VPC is created and no VPC UUID belongs in desired state; validation rejects one.</p></div>
+    <div class="card"><h3>Compute</h3><p><code>provider-compute: digitalocean</code>, the one advertised provider: OpenTofu discovers the configured region’s default VPC at plan time and creates one Ubuntu 24.04 Droplet plus a firewall. No VPC is created and no VPC UUID belongs in desired state; validation rejects one. The machine keypair is generated and owned by the deployment at <code>~/.ssh/&lt;profile&gt;</code> unless <code>digitalocean-ssh-keys</code> names an existing account key. A real create also writes one managed <code>~/.ssh/config</code> block, following the workspace SSH Config Standard, so <code>ssh &lt;profile&gt;</code> reaches the host with no address, user or <code>-i</code> flag; a hand-written <code>Host &lt;profile&gt;</code> stanza outside its markers makes the create refuse rather than overwrite it.</p></div>
     <div class="card"><h3>Runtime</h3><p>Ansible installs Docker and runs three containers: <code>umami</code> <strong>v2.14.0</strong>, <code>postgres:17-alpine</code>, and <code>caddy:2.11.4</code>. PostgreSQL is reachable only on the private Compose network.</p></div>
     <div class="card"><h3>Public boundary</h3><p>Cloudflare publishes one A record. Only ports 22, 80 and 443 are admitted, from the CIDRs named in desired state. Caddy terminates TLS and proxies to <code>umami:3000</code>; the application port is never published.</p></div>
     <div class="card"><h3>Sizing</h3><p><code>s-4vcpu-8gb</code>. Umami is a single Node process over PostgreSQL, so this is generous; the headroom is for Docker, image replacement and backup restore checks running beside the live service.</p></div>
@@ -38,11 +38,11 @@ chmod +x green
   <p>This is deliberately a single-node design. Process and host restarts recover; a Droplet, disk, or regional failure causes downtime, and there is no automatic failover.</p>
 
   <h2>Desired state and credentials</h2>
-  <p><code>colors.yml</code> is the only file you edit, and it holds non-secret values only. It selects the profile, the DigitalOcean region, size and SSH sources, the Cloudflare zone and record, the Umami and PostgreSQL versions, and the backup destination, schedule and retention. See the <a href="skills/package-umami-green/references/configuration.md">configuration reference</a> for every key.</p>
+  <p><code>colors.yml</code> is the only file you edit, and it holds non-secret values only. It selects the profile, the compute provider and its region, size and firewall sources, the Cloudflare zone and record, the Umami and PostgreSQL versions, and the backup destination, schedule and retention. <code>digitalocean-name</code> and <code>digitalocean-ssh-keys</code> are optional. Switching providers is a rebuild — delete on the recorded provider, then create on the new one — never an in-place apply. See the <a href="skills/package-umami-green/references/configuration.md">configuration reference</a> for every key.</p>
   <p>Secrets are supplied only as <code>COLORS_PAR_*</code> environment variables, from an ignored <code>.envrc.private</code>. A real <code>create</code> or <code>delete</code> fails before contacting any provider when one is missing:</p>
   <table>
     <tr><th>Variable</th><th>Purpose</th></tr>
-    <tr><td><code>COLORS_PAR_DO_TOKEN</code></td><td>DigitalOcean compute and firewall</td></tr>
+    <tr><td><code>COLORS_PAR_DO_TOKEN</code></td><td>DigitalOcean compute and firewall (<code>provider-compute: digitalocean</code>)</td></tr>
     <tr><td><code>COLORS_PAR_CLOUDFLARE_API_TOKEN</code></td><td>DNS record for the configured host</td></tr>
     <tr><td><code>COLORS_PAR_POSTGRES_PASSWORD</code></td><td>PostgreSQL password, interpolated at converge time</td></tr>
     <tr><td><code>COLORS_PAR_APP_SECRET_KEY</code></td><td>Umami <code>APP_SECRET</code>; signs sessions. <code>COLORS_PAR_UMAMI_APP_SECRET</code> is accepted as an alternate name</td></tr>
@@ -58,9 +58,9 @@ chmod +x green
 
   <h2>Acceptance and operations</h2>
   <pre><code>./green create
-ssh &lt;droplet&gt; 'cd /opt/umami &amp;&amp; docker compose ps'
-ssh &lt;droplet&gt; 'systemctl status umami-backup.timer'
-ssh &lt;droplet&gt; 'journalctl -u umami-backup.service --since=-24h'</code></pre>
+ssh &lt;profile&gt; 'cd /opt/umami &amp;&amp; docker compose ps'
+ssh &lt;profile&gt; 'systemctl status umami-backup.timer'
+ssh &lt;profile&gt; 'journalctl -u umami-backup.service --since=-24h'</code></pre>
   <p>Acceptance runs at the end of <code>create</code> and reports only what it checked:</p>
   <ul>
     <li><strong>HTTPS with certificate verification.</strong> <code>/api/heartbeat</code> must answer over a valid certificate; the check never disables verification.</li>
@@ -81,6 +81,6 @@ ssh &lt;droplet&gt; 'journalctl -u umami-backup.service --since=-24h'</code></pr
 bb golden
 bb golden:accept
 ./scripts/launcher.sh</code></pre>
-  <p>Golden fixtures render the whole deployment from a fixture <code>colors.yml</code> and compare byte for byte; the accept step refuses to copy a rendered tree containing a credential-shaped value. <a href="https://github.com/getcolors/umami">Source on GitHub</a>. Read every golden diff — never accept generated output merely to make the suite pass.</p>
+  <p>Golden fixtures render the whole deployment from two fixture <code>colors.yml</code> files — one per keypair mode of the SSH Keypair Standard — and compare byte for byte; the accept step refuses to copy a rendered tree containing a credential-shaped value or the operator’s home directory. <a href="https://github.com/getcolors/umami">Source on GitHub</a>. Read every golden diff — never accept generated output merely to make the suite pass.</p>
 </main></body>
 </html>

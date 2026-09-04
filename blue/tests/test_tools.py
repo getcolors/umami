@@ -2,11 +2,18 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from conftest import fixture
+from blue.scaffold import render_template
+from conftest import fixture, keygen
 from package_umami_blue import tools
 
 RESOURCES = (Path(__file__).resolve().parents[1]
              / "src" / "package_umami_blue" / "resources")
+
+
+def _render_infrastructure(opts: dict) -> str:
+    """The compute template for `opts`' provider, rendered as `build` would."""
+    return render_template(tools.template(f"infrastructure.{opts.get('provider-compute')}", "main.tf"),
+                           tools.infrastructure_data(opts), tools.template_opts)
 
 
 async def test_delete_cleanup_skips_when_state_has_no_compute(tmp_path):
@@ -37,6 +44,68 @@ async def test_delete_cleanup_targets_the_adopted_address(tmp_path):
 def test_infrastructure_discovers_default_vpc():
     data = tools.infrastructure_data(fixture())
     assert tools.cidrs(data, "digitalocean-http-sources") == ["0.0.0.0/0", "::/0"]
+    assert "0.0.0.0/0" in data["http-sources-hcl"]
+
+
+def test_hostname_is_provider_neutral():
+    # The playbook used digitalocean-name, which renders empty without the
+    # override; the resolved name is what every label derives from.
+    assert tools.compute_name(fixture()) == "umami-fixture"
+    assert tools.compute_name(fixture({"digitalocean-name": None})) == "umami-fixture"
+    assert "<{ compute-name }>" in (RESOURCES / "tools" / "ansible" / "main.yml").read_text()
+
+
+def test_infrastructure_data_carries_the_name_and_the_keypair_mode():
+    # One resolved name and one mode reach every template, so no template
+    # branches on the provider or re-derives either.
+    optout = tools.infrastructure_data(fixture())
+    assert optout["compute-name"] == "umami-fixture"
+    assert optout["ssh-keygen"] is False
+    generated = tools.infrastructure_data(keygen())
+    assert generated["compute-name"] == "umami-keygen-fixture"
+    assert generated["ssh-keygen"] is True
+    assert tools.ansible_data(keygen())["ssh-keygen"] is True
+    assert tools.ansible_data(fixture())["ssh-keygen"] is False
+
+
+def test_templates_name_the_machine_from_one_resolved_value():
+    # Every label -- droplet name, firewall name and params.name --
+    # interpolates compute-name, never a provider key or the profile directly.
+    template = (RESOURCES / "tools" / "infrastructure" / "digitalocean" / "main.tf").read_text()
+    assert "<{ digitalocean-name }>" not in template
+    assert 'name     = "<{ compute-name }>"' in template
+    assert 'provider = "digitalocean"' in template
+    rendered = _render_infrastructure(fixture({"digitalocean-name": "custom-label"}))
+    assert 'name     = "custom-label"' in rendered
+    assert 'name        = "custom-label-firewall"' in rendered
+    assert 'name = "custom-label"' in rendered
+
+
+def test_empty_http_sources_renders_no_public_http():
+    # An empty `digitalocean-http-sources` is allowed and means no public HTTP:
+    # the 80/443 rules are a dynamic block over an empty list, because a rule
+    # with no source is an API error to DigitalOcean, not a closed port. SSH
+    # stays.
+    empty = _render_infrastructure(fixture({"digitalocean-http-sources": []}))
+    assert "length([]) > 0 ? [" in empty
+    assert "source_addresses = []" in empty
+    assert 'port_range       = "22"' in empty
+    full = _render_infrastructure(fixture())
+    assert 'length(["0.0.0.0/0", "::/0"]) > 0 ? [' in full
+    assert '{ protocol = "tcp", port_range = "80" }' in full
+    assert '{ protocol = "tcp", port_range = "443" }' in full
+    assert 'udp", port_range = "443' not in full
+
+
+def test_keygen_mode_renders_the_key_resource_and_opt_out_keeps_the_literal():
+    generated = _render_infrastructure(keygen())
+    assert 'resource "digitalocean_ssh_key" "machine"' in generated
+    assert "ssh_keys = [digitalocean_ssh_key.machine.id]" in generated
+    assert "ssh_key_id = digitalocean_ssh_key.machine.id" in generated
+    opted_out = _render_infrastructure(fixture())
+    assert "digitalocean_ssh_key" not in opted_out
+    assert 'ssh_keys = ["58495393"]' in opted_out
+    assert "ssh_key_id" not in opted_out
 
 
 def test_dns_computes_zone_and_record():

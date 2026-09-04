@@ -13,12 +13,14 @@ from blue.ansible import ansible_with_spec
 from blue.cli import stage_dir
 from blue.runtime import runtime
 from blue.scaffold import PRESERVE_JINJA_DELIMITERS, content_spec, scaffold
+from package_once_blue import compute as once_compute
 
-from . import validate
+from . import ssh, ssh_config, validate
 
 infrastructure_tool = "umami-infrastructure"
 dns_tool = "umami-dns"
 ansible_tool = "umami-ansible"
+ansible_local_tool = "umami-ansible-local"
 ROOT = Path(__file__).parent / "resources"
 template_opts = PRESERVE_JINJA_DELIMITERS
 
@@ -28,7 +30,7 @@ def tool_dir(opts: dict, tool: str) -> str:
 
 
 def template(path: str, file: str) -> dict:
-    name = f"tools/{path}/{file}"
+    name = f"tools/{path.replace('.', '/')}/{file}"
     return {"name": name, "content": (ROOT / name).read_text()}
 
 
@@ -40,11 +42,9 @@ def raw_spec(target: str, content: str) -> dict:
     return content_spec(target, content)
 
 
-def cidrs(opts: dict, key: str) -> list[str]:
-    value = opts.get(key)
-    xs = value if isinstance(value, list) else re.split(
-        r"[,\s]+", "" if value is None else str(value))
-    return [s for s in (str(x).strip() for x in xs) if s]
+# The source lists as validate parses them, so the template and the
+# validator can never disagree about what an entry is. ONCE's.
+cidrs = validate.cidrs
 
 
 def credential_env(opts: dict, *slots: str) -> dict[str, str] | None:
@@ -63,49 +63,59 @@ def backend_credential_env(opts: dict) -> dict[str, str] | None:
     return credential_env(opts)
 
 
-def fallback_params(opts: dict) -> dict:
-    return {"ip": "192.0.2.10", "user": "root", "sudoer": "root",
-            "name": opts.get("profile")}
+# What `build` and `--dry-run` render in place of a compute output: the
+# documentation address, shaped like the selected provider's real `params` so
+# every later stage sees the same keys either way. ONCE's.
+fallback_params = once_compute.fallback_params
 
+# Refuse to hand 192.0.2.10 to Ansible on a real converge whose compute output
+# carries no `ip`. ONCE's; `infrastructure_step` is what wires it.
+resolved_compute = once_compute.resolved_compute
 
-def output_params(result: dict) -> dict | None:
-    return (result.get("tofu/outputs") or {}).get("params")
+# `<provider>-<suffix>`, the selected provider's key. ONCE's, via validate.
+compute_key = validate.compute_key
+
+# The machine's name: `digitalocean-name` when present, else the profile.
+# ONCE's, via validate; the template and the playbook derive every label from
+# it.
+compute_name = validate.compute_name
 
 
 # ---------------------------------------------------------------- compute
 
 
 def infrastructure_data(opts: dict) -> dict:
+    """Template values for the compute stage. The name, the keypair mode and
+    the source lists are resolved here once, so a template interpolates values
+    and never branches on which provider it belongs to."""
     return {**opts,
-            "ssh-sources-hcl": tofu.hcl_list(cidrs(opts, "digitalocean-ssh-sources")),
-            "http-sources-hcl": tofu.hcl_list(cidrs(opts, "digitalocean-http-sources"))}
+            "ssh-keygen": validate.keygen(opts),
+            "compute-name": compute_name(opts),
+            "ssh-sources-hcl": tofu.hcl_list(cidrs(opts, compute_key(opts, "ssh-sources"))),
+            "http-sources-hcl": tofu.hcl_list(cidrs(opts, compute_key(opts, "http-sources")))}
 
 
-def resolved_compute(result: dict, fallback: dict, outputs: dict | None) -> dict:
-    """Refuse to hand 192.0.2.10 to Ansible. That is the documentation address
-    the credential-free build and dry-run paths render with; on a real converge
-    a missing compute output must fail loudly rather than quietly point the
-    whole playbook at TEST-NET."""
-    if (outputs or {}).get("ip"):
-        return {**result, **fallback, **(outputs or {})}
-    return {**result, "blue/exit": 1,
-            "blue/err": ("compute produced no ip output; refusing to converge "
-                         "against the documentation address")}
+def infrastructure_specs(opts: dict) -> list[dict]:
+    """Providers are selected by template directory, not by conditionals inside
+    one file: `tools/infrastructure/<provider>/main.tf`, rendered to the one
+    `<stage>/main.tf` every later stage reads."""
+    dir = tool_dir(opts, infrastructure_tool)
+    return [spec(template(f"infrastructure.{opts.get('provider-compute')}", "main.tf"),
+                 f"{dir}/main.tf", infrastructure_data(opts))]
 
 
 async def infrastructure_step(opts: dict) -> dict:
     dir = tool_dir(opts, infrastructure_tool)
-    specs = [spec(template("infrastructure", "main.tf"), f"{dir}/main.tf",
-                  infrastructure_data(opts))]
     result = await tofu.tofu_with_spec(
-        opts, specs, dir=dir, env=credential_env(opts, "provider-compute"))
+        opts, infrastructure_specs(opts),
+        dir=dir, env=credential_env(opts, "provider-compute"))
     if (result.get("blue/exit") or 0) > 0:
         return result
     if opts.get("blue/event") == "build":
         return {**result, **fallback_params(opts)}
     if opts.get("blue/event") == "delete":
         return result
-    return resolved_compute(result, fallback_params(opts), output_params(result))
+    return resolved_compute(result, fallback_params(opts), once_compute.output_params(result))
 
 
 # -------------------------------------------------------------------- dns
@@ -146,6 +156,41 @@ async def dns_step(opts: dict) -> dict:
         opts, specs, dir=dir, env=credential_env(opts, "provider-dns"))
 
 
+# ---------------------------------------------------------- ansible (local)
+
+
+def ansible_local_data(opts: dict) -> dict:
+    """Only what a `build` genuinely knows. The address, the user and the alias
+    are run-time facts and reach the play as extra-vars instead, so the
+    rendered playbook carries no IP and is identical on every workstation (SSH
+    Config Standard §6)."""
+    return {**opts,
+            "ssh-keygen": validate.keygen(opts),
+            "ssh-config-identity-file": ssh_config.identity_file(opts)}
+
+
+def ansible_local_specs(opts: dict) -> list[dict]:
+    dir = tool_dir(opts, ansible_local_tool)
+    data = ansible_local_data(opts)
+    return [spec(template("ansible-local", name), f"{dir}/{name}", data)
+            for name in ["ansible.cfg", "inventory.ini", "main.yml"]]
+
+
+async def ansible_local_step(opts: dict) -> dict:
+    """Write or remove the `~/.ssh/config` block. The same playbook serves both
+    events; `block_state` is what distinguishes them."""
+    dir = tool_dir(opts, ansible_local_tool)
+    delete = opts.get("blue/event") == "delete"
+    return await ansible_with_spec(
+        opts, ansible_local_specs(opts),
+        dir=dir, inventory="inventory.ini",
+        playbooks={"create": "main.yml", "delete": "main.yml"},
+        extra_vars={"host_alias": ssh_config.host_alias(opts),
+                    "ip": opts.get("ip") or fallback_params(opts)["ip"],
+                    "user": opts.get("user") or "root",
+                    "block_state": "absent" if delete else "present"})
+
+
 # ---------------------------------------------------------------- ansible
 
 
@@ -180,6 +225,10 @@ def _first(opts: dict, *keys: str):
 
 
 def ansible_data(opts: dict) -> dict:
+    """Template values for the Ansible stage. `ssh-private-key-path` reaches
+    ansible.cfg so convergence uses the deployment's own key in keygen mode,
+    where nothing guarantees an agent holds it; `compute-name` is the hostname
+    the playbook sets."""
     umami_image = opts.get("umami-image") or (
         "ghcr.io/umami-software/umami:postgresql-"
         + str(opts.get("umami-version") or "v2.14.0"))
@@ -187,6 +236,8 @@ def ansible_data(opts: dict) -> dict:
         "postgres:" + str(opts.get("postgres-version") or "17") + "-alpine")
     return {**opts,
             "ip": opts.get("ip") or "192.0.2.10",
+            "ssh-keygen": validate.keygen(opts),
+            "compute-name": compute_name(opts),
             "umami-image": umami_image,
             "postgres-image": postgres_image,
             "postgres-db": _first(opts, "postgres-database", "postgres-db") or "umami",
@@ -246,17 +297,21 @@ async def http_status(args: list[str]) -> str | None:
     return str(r.out or "").strip() if r.exit == 0 else None
 
 
-async def ssh_out(ip, command: str, timeout_ms: int) -> str | None:
+async def ssh_out(opts: dict, ip, command: str, timeout_ms: int) -> str | None:
+    """Run `command` on the host over ssh. The deployment's own key is selected
+    in keygen mode (`ssh.identity_args`), because nothing guarantees an agent
+    holds it; opt-out mode adds nothing and relies on the operator's
+    identities."""
     r = await runtime.exec(
         ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
-         f"root@{ip}", command],
+         *ssh.identity_args(opts), f"root@{ip}", command],
         timeout_ms=timeout_ms)
     return str(r.out or "").strip() if r.exit == 0 else None
 
 
 async def sql(opts: dict, ip, query: str) -> str | None:
     out = str(await ssh_out(
-        ip,
+        opts, ip,
         "cd /opt/umami && docker compose exec -T postgres psql -U "
         f"{opts.get('postgres-user')} -d {opts.get('postgres-db')}"
         f" -tAc '{query}'",
@@ -375,7 +430,7 @@ async def backup_listing(opts: dict, ip) -> list[dict] | None:
     """Objects under this profile's prefix, listed on the droplet with the
     credentials the backup unit already holds."""
     out = await ssh_out(
-        ip,
+        opts, ip,
         f"set -a; . /etc/umami-backup.env; set +a; {rclone_env}"
         ' RCLONE_CONFIG_R2_ACCESS_KEY_ID="$BACKUP_R2_ACCESS_KEY_ID"'
         ' RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$BACKUP_R2_SECRET_ACCESS_KEY"'
@@ -410,9 +465,9 @@ def fresh_backup(entries, since: datetime) -> bool:
     return False
 
 
-async def run_backup(ip) -> str | None:
+async def run_backup(opts: dict, ip) -> str | None:
     return await ssh_out(
-        ip,
+        opts, ip,
         "systemctl start umami-backup.service && systemctl is-active umami-backup.timer",
         300000)
 
@@ -443,7 +498,7 @@ async def acceptance_step(opts: dict) -> dict:
     if verdict in ("dropped", "rejected", "unreachable"):
         return {**opts, "blue/exit": 1,
                 "blue/err": f"synthetic event was not ingested: {verdict}"}
-    if await run_backup(ip) is None:
+    if await run_backup(opts, ip) is None:
         return {**opts, "blue/exit": 1,
                 "blue/err": "backup unit or timer is not healthy"}
     if not fresh_backup(await backup_listing(opts, ip), since):

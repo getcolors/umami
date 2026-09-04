@@ -5,7 +5,18 @@ from blue.cli import load_yaml
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def fixture(overrides: dict | None = None) -> dict:
-    text = (ROOT / "test" / "fixtures" / "colors.yml").read_text().replace(
-        "WORKDIR", ".colors")
+def _load(name: str, overrides: dict | None = None) -> dict:
+    text = (ROOT / "test" / "fixtures" / name).read_text().replace("WORKDIR", ".colors")
     return {**load_yaml(text), **(overrides or {})}
+
+
+def fixture(overrides: dict | None = None) -> dict:
+    """DigitalOcean, opt-out mode: an explicit key id and a name equal to the
+    profile -- the shape every umami deployment has had."""
+    return _load("colors.yml", overrides)
+
+
+def keygen(overrides: dict | None = None) -> dict:
+    """DigitalOcean, keygen mode: no `digitalocean-ssh-keys`, no
+    `digitalocean-name`."""
+    return _load("keygen.yml", overrides)

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from conftest import fixture
+from conftest import fixture, keygen
 from package_umami_blue import validate
 
 RESOURCES = (Path(__file__).resolve().parents[1]
@@ -9,6 +9,118 @@ RESOURCES = (Path(__file__).resolve().parents[1]
 
 def test_fixture_is_valid():
     assert validate.state_errors(fixture()) == []
+
+
+def test_keygen_fixture_is_valid():
+    assert validate.state_errors(keygen()) == []
+
+
+# --- the spec handed to ONCE
+
+
+def test_the_spec_carries_this_packages_registry_sources_and_default():
+    # The operations are ONCE's; this is the data they run over. A colour
+    # whose registry, sources or default drifts fails here, in that colour.
+    assert set(validate.spec["registry"]) == {"digitalocean"}
+    assert validate.spec["registry"] is validate.compute_providers
+    assert validate.spec["registry"]["digitalocean"] == {
+        "required": ["digitalocean-region", "digitalocean-size", "digitalocean-image",
+                     "digitalocean-ssh-sources", "digitalocean-http-sources"],
+        "secrets": ["do-token"],
+        "tofu-env": {"do-token": "DIGITALOCEAN_TOKEN"},
+    }
+    assert validate.spec["sources"] == {"non_empty": ["ssh-sources"],
+                                        "may_be_empty": ["http-sources"]}
+    # DigitalOcean: the default is what a legacy state without params.provider
+    # is, and every state this package ever wrote is a DigitalOcean one.
+    assert validate.spec["default"] == "digitalocean"
+    assert validate.spec["default"] == validate.default_compute_provider
+    assert "name_rules" not in validate.spec, "the name rules are ONCE's"
+
+
+# --- the compute-provider registry
+
+
+def test_compute_provider_must_be_one_the_package_has_a_template_for():
+    # The registry is the only list; a provider accepted here with no template
+    # directory would fail at render time instead of at validation.
+    errors = validate.state_errors(fixture({"provider-compute": "vultr"}))
+    assert ":provider-compute must be one of digitalocean" in errors
+
+
+def test_name_and_machine_key_are_never_required():
+    # `digitalocean-name` is an optional override of the profile and
+    # `digitalocean-ssh-keys` is meaningful by its absence, so neither may be
+    # in the registry's required list -- a required machine key would make
+    # keygen mode unreachable.
+    for entry in validate.compute_providers.values():
+        for key in entry["required"]:
+            assert not key.endswith("-name"), key
+            assert not key.endswith("-ssh-keys"), key
+    assert validate.state_errors(
+        fixture({"digitalocean-name": None, "digitalocean-ssh-keys": None})) == []
+
+
+def test_unselected_provider_keys_are_ignored_not_refused():
+    # One colors.yml may carry another provider's block; only the selected
+    # provider's keys are read. `digitalocean-https-sources`, which older
+    # desired state carries, is likewise accepted and ignored.
+    assert validate.state_errors(fixture({"vultr-plan": "vc2-2c-4gb", "vultr-os-id": "ubuntu"})) == []
+    assert validate.state_errors(fixture({"digitalocean-https-sources": ["0.0.0.0/0"]})) == []
+    assert any("digitalocean-size" in e
+               for e in validate.state_errors(fixture({"digitalocean-size": None})))
+
+
+def test_absent_machine_key_selects_keygen():
+    assert validate.keygen(keygen())
+    assert not validate.keygen(fixture())
+    # Absence, not a flag, is the switch.
+    assert validate.keygen(fixture({"digitalocean-ssh-keys": None}))
+
+
+def test_compute_name_falls_back_to_the_profile():
+    assert validate.compute_name(fixture()) == "umami-fixture"
+    assert validate.compute_name(keygen()) == "umami-keygen-fixture"
+    assert validate.compute_name(fixture({"digitalocean-name": "custom"})) == "custom"
+    assert validate.compute_key(fixture(), "ssh-sources") == "digitalocean-ssh-sources"
+
+
+def test_compute_credentials_follow_the_provider():
+    assert validate.tofu_env(fixture(), "provider-compute") == \
+        {"do-token": "DIGITALOCEAN_TOKEN"}
+    assert validate.tofu_env(fixture({"provider-compute": "vultr"}), "provider-compute") == {}
+
+
+# --- the network contract, wired through state_errors with ONCE's messages
+
+
+def test_ssh_sources_must_not_be_empty():
+    # A machine nobody can reach is not a deployment; an empty HTTP list is
+    # simply no public HTTP.
+    assert ":digitalocean-ssh-sources must list at least one CIDR" in \
+        validate.state_errors(fixture({"digitalocean-ssh-sources": []}))
+    assert validate.state_errors(fixture({"digitalocean-http-sources": []})) == []
+
+
+def test_malformed_sources_are_refused_before_any_provider_call():
+    assert ':digitalocean-http-sources entry "203.0.113.0" is not an IPv4 or IPv6 CIDR' in \
+        validate.state_errors(fixture({"digitalocean-http-sources": ["203.0.113.0"]}))
+    assert ':digitalocean-ssh-sources entry "nope" is not an IPv4 or IPv6 CIDR' in \
+        validate.state_errors(fixture({"digitalocean-ssh-sources": ["0.0.0.0/0", "nope"]}))
+    assert validate.state_errors(
+        fixture({"digitalocean-ssh-sources": ["2001:db8::/32", "203.0.113.4/32"]})) == []
+
+
+# --- provider checks run only for the selected provider
+
+
+def test_provider_checks_are_scoped_to_the_selected_provider():
+    # DigitalOcean's VPC keys are refused on DigitalOcean, and the resolved
+    # droplet name is held to DigitalOcean's rules.
+    assert any("vpc-uuid" in e for e in
+               validate.state_errors(fixture({"digitalocean-vpc-uuid": "forbidden"})))
+    assert any("digitalocean-name must be a hostname-like name" in e for e in
+               validate.state_errors(fixture({"digitalocean-name": "Not Valid"})))
 
 
 def test_reports_all_errors():

@@ -5,8 +5,14 @@ import * as tofu from "red/tofu";
 import { runtime } from "red/runtime";
 import type { Opts } from "red/workflow";
 import { failed } from "red/workflow";
+import { compute } from "package-once-red";
+import * as ssh from "./ssh.ts";
+import * as sshConfig from "./ssh-config.ts";
 import * as validate from "./validate.ts";
 
+import ansibleLocalCfg from "../resources/tools/ansible-local/ansible.cfg" with { type: "text" };
+import ansibleLocalInventory from "../resources/tools/ansible-local/inventory.ini" with { type: "text" };
+import ansibleLocalMain from "../resources/tools/ansible-local/main.yml" with { type: "text" };
 import ansibleCfg from "../resources/tools/ansible/ansible.cfg" with { type: "text" };
 import ansibleMain from "../resources/tools/ansible/main.yml" with { type: "text" };
 import ansibleCleanup from "../resources/tools/ansible/cleanup.yml" with { type: "text" };
@@ -14,18 +20,40 @@ import ansibleCompose from "../resources/tools/ansible/compose.yml" with { type:
 import ansibleCaddyfile from "../resources/tools/ansible/Caddyfile" with { type: "text" };
 import ansibleBackup from "../resources/tools/ansible/backup" with { type: "text" };
 import dnsMainTf from "../resources/tools/dns/main.tf" with { type: "text" };
-import infrastructureMainTf from "../resources/tools/infrastructure/main.tf" with { type: "text" };
+import infrastructureDigitaloceanTf from "../resources/tools/infrastructure/digitalocean/main.tf" with { type: "text" };
 
 export const infrastructureTool = "umami-infrastructure";
 export const dnsTool = "umami-dns";
 export const ansibleTool = "umami-ansible";
+export const ansibleLocalTool = "umami-ansible-local";
 export const templateOpts = PRESERVE_JINJA_DELIMITERS;
 
 export function toolDir(opts: Opts, tool: string): string {
   return stageDir(opts, tool, { defaultProfile: "umami" });
 }
 
-const template = (name: string, content: string): Template => ({ name, content });
+// The template tree this colour carries, keyed the way green names its
+// classpath resources: "<path>/<file>" with dots as directories.
+const templates: Record<string, string> = {
+  "ansible-local/ansible.cfg": ansibleLocalCfg,
+  "ansible-local/inventory.ini": ansibleLocalInventory,
+  "ansible-local/main.yml": ansibleLocalMain,
+  "ansible/ansible.cfg": ansibleCfg,
+  "ansible/main.yml": ansibleMain,
+  "ansible/cleanup.yml": ansibleCleanup,
+  "ansible/compose.yml": ansibleCompose,
+  "ansible/Caddyfile": ansibleCaddyfile,
+  "ansible/backup": ansibleBackup,
+  "dns/main.tf": dnsMainTf,
+  "infrastructure/digitalocean/main.tf": infrastructureDigitaloceanTf,
+};
+
+export function template(path: string, file: string): Template {
+  const name = `${path.replaceAll(".", "/")}/${file}`;
+  const content = templates[name];
+  if (content === undefined) throw new Error(`template not found: ${name}`);
+  return { name, content };
+}
 
 function spec(source: Template, target: string, data: Opts): Spec {
   return { template: source, target, data, opts: templateOpts };
@@ -33,11 +61,9 @@ function spec(source: Template, target: string, data: Opts): Spec {
 
 const rawSpec = (target: string, content: string): Spec => contentSpec(target, content);
 
-export function cidrs(opts: Opts, key: string): string[] {
-  const value = opts[key];
-  const parts = Array.isArray(value) ? value : String(value ?? "").split(/[,\s]+/);
-  return parts.map((part) => String(part).trim()).filter((part) => part.length > 0);
-}
+// The source lists as validate parses them, so the template and the
+// validator can never disagree about what an entry is. ONCE's.
+export const cidrs = validate.cidrs;
 
 export function credentialEnv(opts: Opts, ...slots: string[]): Record<string, string> | undefined {
   const mapping: Record<string, string> = Object.assign(
@@ -54,51 +80,55 @@ export function credentialEnv(opts: Opts, ...slots: string[]): Record<string, st
 
 export const backendCredentialEnv = (opts: Opts) => credentialEnv(opts);
 
-export function fallbackParams(opts: Opts): Record<string, unknown> {
-  return { ip: "192.0.2.10", user: "root", sudoer: "root", name: opts.profile };
-}
+// What `build` and `--dry-run` render in place of a compute output: the
+// documentation address, shaped like the selected provider's real `params` so
+// every later stage sees the same keys either way. ONCE's.
+export const fallbackParams = compute.fallbackParams;
 
-export function outputParams(result: Opts): Record<string, unknown> | undefined {
-  const params = (result["tofu/outputs"] as Record<string, unknown> | undefined)?.params;
-  return params && typeof params === "object" ? params as Record<string, unknown> : undefined;
-}
+// Refuse to hand 192.0.2.10 to Ansible on a real converge whose compute output
+// carries no `ip`. ONCE's; `infrastructureStep` is what wires it.
+export const resolvedCompute = compute.resolvedCompute;
+
+// `<provider>-<suffix>`, the selected provider's key. ONCE's, via validate.
+export const computeKey = validate.computeKey;
+
+// The machine's name: `digitalocean-name` when present, else the profile.
+// ONCE's, via validate; the template and the playbook derive every label from
+// it.
+export const computeName = validate.computeName;
 
 // ---------------------------------------------------------------- compute
 
+// Template values for the compute stage. The name, the keypair mode and the
+// source lists are resolved here once, so a template interpolates values and
+// never branches on which provider it belongs to.
 export function infrastructureData(opts: Opts): Opts {
   return {
     ...opts,
-    "ssh-sources-hcl": tofu.hclList(cidrs(opts, "digitalocean-ssh-sources")),
-    "http-sources-hcl": tofu.hclList(cidrs(opts, "digitalocean-http-sources")),
+    "ssh-keygen": validate.keygen(opts),
+    "compute-name": computeName(opts),
+    "ssh-sources-hcl": tofu.hclList(cidrs(opts, computeKey(opts, "ssh-sources"))),
+    "http-sources-hcl": tofu.hclList(cidrs(opts, computeKey(opts, "http-sources"))),
   };
 }
 
-// Refuse to hand 192.0.2.10 to Ansible. That is the documentation address the
-// credential-free build and dry-run paths render with; on a real converge a
-// missing compute output must fail loudly rather than quietly point the whole
-// playbook at TEST-NET.
-export function resolvedCompute(
-  result: Opts,
-  fallback: Record<string, unknown>,
-  outputs: Record<string, unknown> | undefined,
-): Opts {
-  if (outputs?.ip) return { ...result, ...fallback, ...outputs };
-  return {
-    ...result, "red/exit": 1,
-    "red/err": "compute produced no ip output; refusing to converge against the documentation address",
-  };
+// Providers are selected by template directory, not by conditionals inside one
+// file: `tools/infrastructure/<provider>/main.tf`, rendered to the one
+// `<stage>/main.tf` every later stage reads.
+export function infrastructureSpecs(opts: Opts): Spec[] {
+  const dir = toolDir(opts, infrastructureTool);
+  return [spec(template(`infrastructure.${opts["provider-compute"]}`, "main.tf"),
+               `${dir}/main.tf`, infrastructureData(opts))];
 }
 
 export async function infrastructureStep(opts: Opts): Promise<Opts> {
   const dir = toolDir(opts, infrastructureTool);
-  const specs = [spec(template("infrastructure/main.tf", infrastructureMainTf),
-                      `${dir}/main.tf`, infrastructureData(opts))];
-  const result = await tofu.tofuWithSpec(opts, specs,
+  const result = await tofu.tofuWithSpec(opts, infrastructureSpecs(opts),
     { dir, env: credentialEnv(opts, "provider-compute") });
   if (failed(result)) return result;
   if (opts["red/event"] === "build") return { ...result, ...fallbackParams(opts) };
   if (opts["red/event"] === "delete") return result;
-  return resolvedCompute(result, fallbackParams(opts), outputParams(result));
+  return resolvedCompute(result, fallbackParams(opts), compute.outputParams(result));
 }
 
 // -------------------------------------------------------------------- dns
@@ -133,7 +163,7 @@ export async function dnsStep(opts: Opts): Promise<Opts> {
   const dir = toolDir(opts, dnsTool);
   const data = dnsData(opts);
   const specs = [
-    spec(template("dns/main.tf", dnsMainTf), `${dir}/main.tf`, data),
+    spec(template("dns", "main.tf"), `${dir}/main.tf`, data),
     rawSpec(`${dir}/record.tf.json`, dnsJson(data)),
   ];
   return tofu.tofuWithSpec(opts, specs, { dir, env: credentialEnv(opts, "provider-dns") });
@@ -157,6 +187,50 @@ function pretty(value: unknown, indent = 0): string {
   return JSON.stringify(value ?? null);
 }
 
+// ---------------------------------------------------------- ansible (local)
+
+// Only what a `build` genuinely knows. The address, the user and the alias are
+// run-time facts and reach the play as extra-vars instead, so the rendered
+// playbook carries no IP and is identical on every workstation (SSH Config
+// Standard §6).
+export function ansibleLocalData(opts: Opts): Opts {
+  return {
+    ...opts,
+    "ssh-keygen": validate.keygen(opts),
+    "ssh-config-identity-file": sshConfig.identityFile(opts),
+  };
+}
+
+export function ansibleLocalSpecs(opts: Opts): Spec[] {
+  const dir = toolDir(opts, ansibleLocalTool);
+  const data = ansibleLocalData(opts);
+  return [
+    spec(template("ansible-local", "ansible.cfg"), `${dir}/ansible.cfg`, data),
+    spec(template("ansible-local", "inventory.ini"), `${dir}/inventory.ini`, data),
+    spec(template("ansible-local", "main.yml"), `${dir}/main.yml`, data),
+  ];
+}
+
+// Write or remove the `~/.ssh/config` block. The same playbook serves both
+// events; `block_state` is what distinguishes them.
+export async function ansibleLocalStep(opts: Opts): Promise<Opts> {
+  const dir = toolDir(opts, ansibleLocalTool);
+  const isDelete = opts["red/event"] === "delete";
+  return ansible.ansibleWithSpec(opts, {
+    dir,
+    inventory: "inventory.ini",
+    playbooks: { create: "main.yml", delete: "main.yml" },
+    extraVars: {
+      host_alias: sshConfig.hostAlias(opts),
+      ip: opts.ip ?? fallbackParams(opts).ip,
+      user: opts.user ?? "root",
+      block_state: isDelete ? "absent" : "present",
+    },
+  }, ansibleLocalSpecs(opts));
+}
+
+// ---------------------------------------------------------------- ansible
+
 export function inventory(opts: Opts): string {
   return pretty({
     all: {
@@ -174,10 +248,16 @@ export function inventory(opts: Opts): string {
   });
 }
 
+// Template values for the Ansible stage. `ssh-private-key-path` reaches
+// ansible.cfg so convergence uses the deployment's own key in keygen mode,
+// where nothing guarantees an agent holds it; `compute-name` is the hostname
+// the playbook sets.
 export function ansibleData(opts: Opts): Opts {
   return {
     ...opts,
     ip: opts.ip ?? "192.0.2.10",
+    "ssh-keygen": validate.keygen(opts),
+    "compute-name": computeName(opts),
     "umami-image": opts["umami-image"] ??
       `ghcr.io/umami-software/umami:postgresql-${opts["umami-version"] ?? "v2.14.0"}`,
     "postgres-image": opts["postgres-image"] ??
@@ -197,17 +277,9 @@ export function ansibleData(opts: Opts): Opts {
 export function ansibleSpecs(opts: Opts): Spec[] {
   const dir = toolDir(opts, ansibleTool);
   const data = ansibleData(opts);
-  const files: Array<[string, string]> = [
-    ["ansible.cfg", ansibleCfg],
-    ["main.yml", ansibleMain],
-    ["cleanup.yml", ansibleCleanup],
-    ["compose.yml", ansibleCompose],
-    ["Caddyfile", ansibleCaddyfile],
-    ["backup", ansibleBackup],
-  ];
   return [
-    ...files.map(([name, content]) =>
-      spec(template(`ansible/${name}`, content), `${dir}/${name}`, data)),
+    ...["ansible.cfg", "main.yml", "cleanup.yml", "compose.yml", "Caddyfile", "backup"]
+      .map((name) => spec(template("ansible", name), `${dir}/${name}`, data)),
     rawSpec(`${dir}/inventory.json`, inventory(data)),
   ];
 }
@@ -246,16 +318,19 @@ export async function httpStatus(args: string[]): Promise<string | undefined> {
   return r.exit === 0 ? String(r.out ?? "").trim() : undefined;
 }
 
-export async function sshOut(ip: unknown, command: string, timeoutMs: number): Promise<string | undefined> {
+// Run `command` on the host over ssh. The deployment's own key is selected in
+// keygen mode (`ssh.identityArgs`), because nothing guarantees an agent holds
+// it; opt-out mode adds nothing and relies on the operator's identities.
+export async function sshOut(opts: Opts, ip: unknown, command: string, timeoutMs: number): Promise<string | undefined> {
   const r = await runtime.exec(
     ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
-     `root@${ip}`, command],
+     ...ssh.identityArgs(opts), `root@${ip}`, command],
     { timeoutMs });
   return r.exit === 0 ? String(r.out ?? "").trim() : undefined;
 }
 
 export async function sql(opts: Opts, ip: unknown, query: string): Promise<string | undefined> {
-  const out = String((await sshOut(ip,
+  const out = String((await sshOut(opts, ip,
     `cd /opt/umami && docker compose exec -T postgres psql -U ${opts["postgres-user"]}` +
     ` -d ${opts["postgres-db"]} -tAc '${query}'`, 30000)) ?? "");
   return out.length > 0 ? out : undefined;
@@ -365,7 +440,7 @@ export interface BackupEntry {
 // Objects under this profile's prefix, listed on the droplet with the
 // credentials the backup unit already holds.
 export async function backupListing(opts: Opts, ip: unknown): Promise<BackupEntry[] | undefined> {
-  const out = await sshOut(ip,
+  const out = await sshOut(opts, ip,
     `set -a; . /etc/umami-backup.env; set +a; ${rcloneEnv}` +
     ' RCLONE_CONFIG_R2_ACCESS_KEY_ID="$BACKUP_R2_ACCESS_KEY_ID"' +
     ' RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$BACKUP_R2_SECRET_ACCESS_KEY"' +
@@ -398,8 +473,8 @@ export function freshBackup(entries: BackupEntry[] | undefined | null, since: Da
   }));
 }
 
-export async function runBackup(ip: unknown): Promise<string | undefined> {
-  return sshOut(ip,
+export async function runBackup(opts: Opts, ip: unknown): Promise<string | undefined> {
+  return sshOut(opts, ip,
     "systemctl start umami-backup.service && systemctl is-active umami-backup.timer",
     300000);
 }
@@ -435,7 +510,7 @@ export async function acceptanceStep(opts: Opts): Promise<Opts> {
     return { ...opts, "red/exit": 1,
       "red/err": `synthetic event was not ingested: ${verdict}` };
   }
-  if ((await runBackup(ip)) === undefined) {
+  if ((await runBackup(opts, ip)) === undefined) {
     return { ...opts, "red/exit": 1, "red/err": "backup unit or timer is not healthy" };
   }
   if (!freshBackup(await backupListing(opts, ip), since)) {

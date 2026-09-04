@@ -11,7 +11,16 @@ via scheduled R2 backups.
 - **Database**: PostgreSQL 17 (`postgres:17-alpine`) with persistent data on `/var/lib/umami/postgres`.
 - **Ingress**: Caddy (`caddy:2.11.4`) terminating TLS on 80/443 and proxying to port 3000.
 - **Disaster Recovery**: Systemd timer `umami-backup.timer` executing `/usr/local/sbin/umami-backup` to `pg_dump` and upload via `rclone` to Cloudflare R2.
-- **Compute**: Single DigitalOcean Droplet with dynamic account default VPC discovery in `ams3`.
+- **Compute**: Single DigitalOcean Droplet with dynamic account default VPC
+  discovery, selected by `provider-compute` from a one-entry registry. The
+  provider operations — selection, the CIDR checks, the rebuild-only switch
+  rule — are ONCE's `compute` namespace over that registry (the workspace
+  Compute Provider Standard).
+- **Access**: The machine keypair is generated and owned by the deployment at
+  `~/.ssh/<profile>` (the SSH Keypair Standard); set `digitalocean-ssh-keys` to
+  an existing account key to opt out.
+- **Reach**: `ssh <profile>` works: the package writes a managed block in
+  `~/.ssh/config` (the SSH Config Standard) on create and removes it on delete.
 
 ## Quick Start
 
@@ -34,10 +43,10 @@ makes them the safe way to check a `colors.yml` edit.
 
 ```sh
 cd green && bb test      # unit tests (canonical Clojure implementation)
-cd green && bb golden    # render the fixture and diff against committed output
+cd green && bb golden    # render both fixtures and diff against committed output
 cd red && bun test && bun run typecheck   # TypeScript implementation
 cd blue && uv run pytest                  # Python implementation
-./scripts/parity.sh      # all three colours render byte-identical trees
+./scripts/parity.sh      # three colours, two keypair modes, byte-identical trees
 ./scripts/launcher.sh    # launcher payload and profile-guard checks
 ```
 

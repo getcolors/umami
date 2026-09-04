@@ -1,0 +1,66 @@
+# Desired state for the umami keygen-mode fixture. Non-secret values only.
+profile: umami-keygen-fixture
+workdir: WORKDIR
+
+provider-compute: digitalocean
+provider-dns: cloudflare
+provider-backend: local
+
+# Preserve this guard in committed desired state.
+compute-prevent-destroy: true
+
+# --- Umami Service -----------------------------------------------------------
+
+# Acceptance sends its synthetic event here rather than to a real website, so
+# converges do not write test rows into your analytics. Created on demand.
+umami-acceptance-website-domain: colors-acceptance.invalid
+
+umami-host: umami.example.com
+umami-version: v2.14.0
+umami-port: 3000
+
+postgres-version: 17
+postgres-port: 5432
+postgres-database: umami
+postgres-user: umami
+postgres-data-dir: /var/lib/umami/postgres
+
+caddy-image: caddy:2.11.4
+
+# --- Backups -----------------------------------------------------------------
+
+backup-r2-bucket: umami-backup
+backup-r2-endpoint: https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com
+backup-r2-region: auto
+backup-oncalendar: "*-*-* 03:00:00"
+backup-retention-days: 7
+backup-dir: /var/backups/umami
+
+# --- DigitalOcean ------------------------------------------------------------
+
+# No `digitalocean-name`: the droplet is named after the profile (Compute Name
+# Standard). No `digitalocean-ssh-keys`: the package generates and owns the
+# machine keypair, ~/.ssh/<profile>, and registers it as an account key named
+# after the profile (SSH Keypair Standard, keygen mode).
+digitalocean-region: ams3
+digitalocean-size: s-4vcpu-8gb
+digitalocean-image: ubuntu-24-04-x64
+
+digitalocean-ssh-sources:
+  - 0.0.0.0/0
+  - "::/0"
+digitalocean-http-sources:
+  - 0.0.0.0/0
+  - "::/0"
+
+# --- Public DNS and TLS ------------------------------------------------------
+
+cloudflare-zone: example.com
+cloudflare-record-name: umami
+# cloudflare-proxied is deliberately absent: the fixture should exercise the
+# default a real deployment gets.
+
+# --- OpenTofu State Backend --------------------------------------------------
+
+r2-bucket: tofu-state-319271fed8bc6d2d9059362be1165f37-eu
+r2-endpoint: https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com

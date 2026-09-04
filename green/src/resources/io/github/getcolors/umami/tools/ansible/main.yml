@@ -17,7 +17,7 @@
         update_cache: true
     # The provider resource name is desired state; the machine should agree with
     # it rather than keeping whatever the image was built with.
-    - ansible.builtin.hostname: {name: "<{ digitalocean-name }>"}
+    - ansible.builtin.hostname: {name: "<{ compute-name }>"}
     - ansible.builtin.systemd_service: {name: docker, enabled: true, state: started}
     - ansible.builtin.file: {path: /opt/umami, state: directory, mode: "0755"}
     - ansible.builtin.file: {path: "<{ postgres-data-dir }>", state: directory, mode: "0755"}

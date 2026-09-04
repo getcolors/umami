@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /opt/umami
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p /var/backups/umami
+dump="/var/backups/umami/umami-$stamp.sql.gz"
+
+docker compose exec -T postgres pg_dump -U umami umami | gzip > "$dump"
+
+# An archive that exists is not an archive that restores. Load it into a
+# scratch database and require the schema to come back, so a silently truncated
+# or malformed dump fails the unit instead of sitting in the bucket looking
+# like a backup.
+check_db="umami_restore_check_$stamp"
+cleanup() {
+  docker compose exec -T postgres psql -U umami -d postgres -q \
+    -c "DROP DATABASE IF EXISTS \"$check_db\"" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+docker compose exec -T postgres psql -U umami -d postgres -q -v ON_ERROR_STOP=1 \
+  -c "CREATE DATABASE \"$check_db\""
+gunzip -c "$dump" | docker compose exec -T postgres psql -U umami -d "$check_db" \
+  -q -v ON_ERROR_STOP=1 >/dev/null
+tables=$(docker compose exec -T postgres psql -U umami -d "$check_db" -tAc \
+  "select count(*) from information_schema.tables where table_schema = 'public'" | tr -d '[:space:]')
+if [ "${tables:-0}" -lt 1 ]; then
+  echo "restore check restored no tables from $dump" >&2
+  exit 1
+fi
+
+export RCLONE_CONFIG_R2_TYPE=s3
+export RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+export RCLONE_CONFIG_R2_REGION=auto
+export RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true
+export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$BACKUP_R2_ACCESS_KEY_ID"
+export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$BACKUP_R2_SECRET_ACCESS_KEY"
+export RCLONE_CONFIG_R2_ENDPOINT="https://319271fed8bc6d2d9059362be1165f37.eu.r2.cloudflarestorage.com"
+
+rclone copyto "$dump" "r2:umami-backup/umami-keygen-fixture/umami-$stamp.sql.gz"
+
+# Retention has to apply to the bucket, not only to this disk: pruning locally
+# while R2 keeps every object forever is not a retention policy.
+rclone delete --min-age 7d "r2:umami-backup/umami-keygen-fixture"
+find /var/backups/umami -type f -name 'umami-*.sql.gz' -mtime +7 -delete

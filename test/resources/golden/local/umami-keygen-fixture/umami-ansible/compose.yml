@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: umami
+      POSTGRES_USER: umami
+      POSTGRES_PASSWORD: "{{ lookup('env','COLORS_PAR_POSTGRES_PASSWORD') }}"
+    volumes:
+      - /var/lib/umami/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U umami -d umami"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  umami:
+    image: ghcr.io/umami-software/umami:postgresql-v2.14.0
+    restart: unless-stopped
+    environment:
+      # urlencode leaves "/" alone, which would terminate the authority and
+      # silently truncate the password, so encode it explicitly.
+      DATABASE_URL: "postgresql://umami:{{ lookup('env','COLORS_PAR_POSTGRES_PASSWORD') | urlencode | replace('/', '%2F') }}@postgres:5432/umami"
+      DATABASE_TYPE: postgresql
+      APP_SECRET: "{{ lookup('env','COLORS_PAR_APP_SECRET_KEY') | default(lookup('env','COLORS_PAR_UMAMI_APP_SECRET'), true) }}"
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+
+  caddy:
+    image: caddy:2.11.4
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [umami]
+    # Access logs are now on, so bound them: an ingestion endpoint writes a
+    # line per request and the default json-file driver never rotates.
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+    networks: [internal]
+
+networks:
+  internal:
+    internal: false
+volumes:
+  caddy-data:
+  caddy-config:

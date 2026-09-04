@@ -3,11 +3,14 @@ set -euo pipefail
 
 # One desired state, three colours, byte for byte. golden.sh is green's
 # regression net against the committed goldens; this is the net across colours:
-# the fixture is rendered by green, red, and blue into separate work
+# each fixture is rendered by green, red, and blue into separate work
 # directories and the trees must be identical — and the template trees each
 # colour carries must be identical too, because the copies are the mechanism
 # (red/resources and blue's embedded resources are copies of green's tree, not
 # references to it).
+#
+# Two fixtures, one per keypair mode: the SSH Keypair Standard has two modes
+# and parity means both keygen and opt-out hold in every colour.
 #
 # Renders resolve each colour's package from this working tree (the
 # UMAMI_LIB_ROOT overrides), while green, once, red, and blue stay on their
@@ -31,6 +34,7 @@ build_variant() {
 }
 
 build_variant colors
+build_variant keygen
 
 diff -r "$root/green/src/resources/io/github/getcolors/umami" "$root/red/resources"
 diff -r "$root/green/src/resources/io/github/getcolors/umami" "$root/blue/src/package_umami_blue/resources"

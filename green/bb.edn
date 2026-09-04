@@ -3,10 +3,14 @@
  :tasks
  {test {:requires ([clojure.test :as t]
                    [io.github.getcolors.umami.validate-test]
+                   [io.github.getcolors.umami.ssh-test]
+                   [io.github.getcolors.umami.ssh-config-test]
                    [io.github.getcolors.umami.tools-test]
                    [io.github.getcolors.umami.workflow-test])
         :task (let [{:keys [fail error]}
                     (t/run-tests 'io.github.getcolors.umami.validate-test
+                                 'io.github.getcolors.umami.ssh-test
+                                 'io.github.getcolors.umami.ssh-config-test
                                  'io.github.getcolors.umami.tools-test
                                  'io.github.getcolors.umami.workflow-test)]
                 (System/exit (if (pos? (+ fail error)) 1 0)))}

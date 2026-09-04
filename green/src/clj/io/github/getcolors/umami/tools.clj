@@ -1,18 +1,21 @@
 (ns io.github.getcolors.umami.tools
   (:require [cheshire.core :as json]
             [clojure.string :as str]
-            [clojure.walk :as walk]
             [green.ansible :as ansible]
             [green.cli :as green-cli]
             [green.process :as process]
             [green.scaffold :as sc]
             [green.tofu :as tofu]
             [green.workflow :as wf]
+            [io.github.getcolors.once.compute :as compute]
+            [io.github.getcolors.umami.ssh :as ssh]
+            [io.github.getcolors.umami.ssh-config :as ssh-config]
             [io.github.getcolors.umami.validate :as validate]))
 
 (def infrastructure-tool "umami-infrastructure")
 (def dns-tool "umami-dns")
 (def ansible-tool "umami-ansible")
+(def ansible-local-tool "umami-ansible-local")
 (def root "io.github.getcolors.umami.tools")
 (def template-opts sc/preserve-jinja-delimiters)
 (defn tool-dir [opts tool] (green-cli/stage-dir opts tool {:default-profile "umami"}))
@@ -20,9 +23,10 @@
 (defn spec [source target data] {:template source :target target :data data :opts template-opts})
 (defn raw-spec [target content] (sc/content-spec target content))
 
-(defn cidrs [opts k]
-  (let [v (get opts k) xs (if (sequential? v) v (str/split (str v) #"[,\s]+"))]
-    (->> xs (map (comp str/trim str)) (remove str/blank?) vec)))
+(def cidrs
+  "The source lists as validate parses them, so the template and the
+  validator can never disagree about what an entry is. ONCE's."
+  validate/cidrs)
 
 (defn credential-env [opts & slots]
   (not-empty
@@ -31,39 +35,56 @@
          (apply merge (map #(validate/tofu-env opts %) (conj (vec slots) :provider-backend))))))
 (defn backend-credential-env [opts] (credential-env opts))
 
-(defn fallback-params [opts]
-  {:ip "192.0.2.10" :user "root" :sudoer "root" :name (:profile opts)})
-(defn output-params [result]
-  (some-> (get-in result [:tofu/outputs :params]) walk/keywordize-keys))
+(def fallback-params
+  "What `build` and `--dry-run` render in place of a compute output: the
+  documentation address, shaped like the selected provider's real `params` so
+  every later stage sees the same keys either way. ONCE's."
+  compute/fallback-params)
 
-(defn infrastructure-data [opts]
+(def resolved-compute
+  "Refuse to hand 192.0.2.10 to Ansible on a real converge whose compute
+  output carries no `ip`. ONCE's; `infrastructure-step` is what wires it."
+  compute/resolved-compute)
+
+(def compute-key
+  "`:<provider>-<suffix>`, the selected provider's key. ONCE's, via validate."
+  validate/compute-key)
+
+(def compute-name
+  "The machine's name: `digitalocean-name` when present, else the profile.
+  ONCE's, via validate; the template and the playbook derive every label from
+  it."
+  validate/compute-name)
+
+(defn infrastructure-data
+  "Template values for the compute stage. The name, the keypair mode and the
+  source lists are resolved here once, so a template interpolates values and
+  never branches on which provider it belongs to."
+  [opts]
   (assoc opts
-         :ssh-sources-hcl (tofu/hcl-list (cidrs opts :digitalocean-ssh-sources))
-         :http-sources-hcl (tofu/hcl-list (cidrs opts :digitalocean-http-sources))))
+         :ssh-keygen (validate/keygen? opts)
+         :compute-name (compute-name opts)
+         :ssh-sources-hcl (tofu/hcl-list (cidrs opts (compute-key opts "ssh-sources")))
+         :http-sources-hcl (tofu/hcl-list (cidrs opts (compute-key opts "http-sources")))))
 
-(defn resolved-compute
-  "Refuse to hand 192.0.2.10 to Ansible. That is the documentation address the
-   credential-free build and dry-run paths render with; on a real converge a
-   missing compute output must fail loudly rather than quietly point the whole
-   playbook at TEST-NET."
-  [result fallback outputs]
-  (if (:ip outputs)
-    (merge result fallback outputs)
-    (assoc result :green/exit 1
-           :green/err (str "compute produced no ip output; refusing to converge "
-                           "against the documentation address"))))
+(defn infrastructure-specs
+  "Providers are selected by template directory, not by conditionals inside one
+   file: `tools/infrastructure/<provider>/main.tf`, rendered to the one
+   `<stage>/main.tf` every later stage reads."
+  [opts]
+  (let [dir (tool-dir opts infrastructure-tool)]
+    [(spec (template (str "infrastructure." (:provider-compute opts)) "main.tf")
+           (str dir "/main.tf") (infrastructure-data opts))]))
 
 (defn infrastructure-step [opts]
   (let [dir (tool-dir opts infrastructure-tool)
-        specs [(spec (template "infrastructure" "main.tf") (str dir "/main.tf")
-                     (infrastructure-data opts))]
-        result (tofu/tofu-with-spec opts specs
+        result (tofu/tofu-with-spec opts (infrastructure-specs opts)
                                     {:dir dir :env (credential-env opts :provider-compute)})]
     (cond
       (wf/failed? result) result
       (= :build (:green/event opts)) (merge result (fallback-params opts))
       (= :delete (:green/event opts)) result
-      :else (resolved-compute result (fallback-params opts) (output-params result)))))
+      :else (resolved-compute result (fallback-params opts) (compute/output-params result)))))
 
 (defn zone-id [zone] (format "${data.cloudflare_zone.zone.id}" zone))
 
@@ -98,6 +119,41 @@
                (raw-spec (str dir "/record.tf.json") (dns-json data))]]
     (tofu/tofu-with-spec opts specs {:dir dir :env (credential-env opts :provider-dns)})))
 
+;; ---------------------------------------------------------- ansible (local)
+
+(defn ansible-local-data
+  "Only what a `build` genuinely knows. The address, the user and the alias are
+  run-time facts and reach the play as extra-vars instead, so the rendered
+  playbook carries no IP and is identical on every workstation (SSH Config
+  Standard §6)."
+  [opts]
+  (assoc opts
+         :ssh-keygen (validate/keygen? opts)
+         :ssh-config-identity-file (ssh-config/identity-file opts)))
+
+(defn ansible-local-specs [opts]
+  (let [dir (tool-dir opts ansible-local-tool) data (ansible-local-data opts)]
+    [(spec (template "ansible-local" "ansible.cfg") (str dir "/ansible.cfg") data)
+     (spec (template "ansible-local" "inventory.ini") (str dir "/inventory.ini") data)
+     (spec (template "ansible-local" "main.yml") (str dir "/main.yml") data)]))
+
+(defn ansible-local-step
+  "Write or remove the `~/.ssh/config` block. The same playbook serves both
+  events; `block_state` is what distinguishes them."
+  [opts]
+  (let [dir (tool-dir opts ansible-local-tool)
+        delete? (= :delete (:green/event opts))]
+    (ansible/ansible-with-spec opts
+      {:dir dir :inventory "inventory.ini"
+       :playbooks {:create "main.yml" :delete "main.yml"}
+       :extra-vars {:host_alias (ssh-config/host-alias opts)
+                    :ip (or (:ip opts) (:ip (fallback-params opts)))
+                    :user (or (:user opts) "root")
+                    :block_state (if delete? "absent" "present")}}
+      (ansible-local-specs opts))))
+
+;; ---------------------------------------------------------------- ansible
+
 (defn inventory [opts]
   (json/generate-string
    {:all {:children {:umami {:hosts {(:profile opts)
@@ -105,9 +161,16 @@
                                       :ansible_user "root"}}}}}}
    {:pretty true}))
 
-(defn ansible-data [opts]
+(defn ansible-data
+  "Template values for the Ansible stage. `ssh-private-key-path` reaches
+  ansible.cfg so convergence uses the deployment's own key in keygen mode,
+  where nothing guarantees an agent holds it; `compute-name` is the hostname
+  the playbook sets."
+  [opts]
   (assoc opts
          :ip (or (:ip opts) "192.0.2.10")
+         :ssh-keygen (validate/keygen? opts)
+         :compute-name (compute-name opts)
          :umami-image (or (:umami-image opts)
                           (str "ghcr.io/umami-software/umami:postgresql-"
                                (or (:umami-version opts) "v2.14.0")))
@@ -159,15 +222,21 @@
            (into ["curl" "-sS" "-o" "/dev/null" "-w" "%{http_code}"] args) {} 20000)]
     (when (zero? (:exit r)) (str/trim (:out r)))))
 
-(defn ssh-out [ip command timeout]
+(defn ssh-out
+  "Run `command` on the host over ssh. The deployment's own key is selected in
+  keygen mode (`ssh/identity-args`), because nothing guarantees an agent holds
+  it; opt-out mode adds nothing and relies on the operator's identities."
+  [opts ip command timeout]
   (let [r (process/run-with-timeout
-           ["ssh" "-o" "StrictHostKeyChecking=no" "-o" "ConnectTimeout=10"
-            (str "root@" ip) command] {} timeout)]
+           (-> ["ssh" "-o" "StrictHostKeyChecking=no" "-o" "ConnectTimeout=10"]
+               (into (ssh/identity-args opts))
+               (conj (str "root@" ip) command))
+           {} timeout)]
     (when (zero? (:exit r)) (str/trim (:out r)))))
 
 (defn sql [opts ip query]
   (not-empty
-   (str (ssh-out ip (str "cd /opt/umami && docker compose exec -T postgres psql -U "
+   (str (ssh-out opts ip (str "cd /opt/umami && docker compose exec -T postgres psql -U "
                          (:postgres-user opts) " -d " (:postgres-db opts)
                          " -tAc '" query "'")
                  30000))))
@@ -250,7 +319,7 @@
   "Objects under this profile's prefix, listed on the droplet with the
    credentials the backup unit already holds."
   [opts ip]
-  (some-> (ssh-out ip (str "set -a; . /etc/umami-backup.env; set +a; " rclone-env
+  (some-> (ssh-out opts ip (str "set -a; . /etc/umami-backup.env; set +a; " rclone-env
                            " RCLONE_CONFIG_R2_ACCESS_KEY_ID=\"$BACKUP_R2_ACCESS_KEY_ID\""
                            " RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=\"$BACKUP_R2_SECRET_ACCESS_KEY\""
                            " RCLONE_CONFIG_R2_ENDPOINT=\"" (:backup-r2-endpoint opts) "\""
@@ -270,8 +339,8 @@
                           (not (.isBefore t since)))))
                  entries)))
 
-(defn run-backup [ip]
-  (ssh-out ip "systemctl start umami-backup.service && systemctl is-active umami-backup.timer"
+(defn run-backup [opts ip]
+  (ssh-out opts ip "systemctl start umami-backup.service && systemctl is-active umami-backup.timer"
            300000))
 
 (defn acceptance-step [opts]
@@ -305,7 +374,7 @@
                 (assoc opts :green/exit 1
                        :green/err (str "synthetic event was not ingested: " (name verdict)))
 
-                (nil? (run-backup ip))
+                (nil? (run-backup opts ip))
                 (assoc opts :green/exit 1 :green/err "backup unit or timer is not healthy")
 
                 (not (fresh-backup? (backup-listing opts ip) since))

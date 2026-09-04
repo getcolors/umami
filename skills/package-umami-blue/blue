@@ -6,7 +6,7 @@
 # [tool.uv.sources]
 # package-umami-blue = { git = "https://github.com/getcolors/umami.git", rev = "36b40842d35a84c65ffc64f0e963a7f40e7ba6f9", subdirectory = "blue" }
 # blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
-# package-once-blue = { git = "https://github.com/getcolors/once.git", subdirectory = "blue", rev = "69527114b8bd1ead0b92dc1b08e6bf9a446c341a" }
+# package-once-blue = { git = "https://github.com/getcolors/once.git", subdirectory = "blue", rev = "38e3cd66674a32fb96605e1b17ae6791086ad5c1" }
 #
 # [tool.uv]
 # override-dependencies = ["blue @ git+https://github.com/getcolors/blue.git@290f313ead5ca162875c33a049c880da017eae09"]
