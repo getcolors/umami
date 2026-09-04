@@ -4,7 +4,7 @@
 # dependencies = ["package-umami-blue", "blue", "package-once-blue"]
 #
 # [tool.uv.sources]
-# package-umami-blue = { git = "https://github.com/getcolors/umami.git", rev = "36b40842d35a84c65ffc64f0e963a7f40e7ba6f9", subdirectory = "blue" }
+# package-umami-blue = { git = "https://github.com/getcolors/umami.git", rev = "5dc30afd28faae2570057d596c3c097bc26b3ee7", subdirectory = "blue" }
 # blue = { git = "https://github.com/getcolors/blue.git", rev = "290f313ead5ca162875c33a049c880da017eae09" }
 # package-once-blue = { git = "https://github.com/getcolors/once.git", subdirectory = "blue", rev = "38e3cd66674a32fb96605e1b17ae6791086ad5c1" }
 #

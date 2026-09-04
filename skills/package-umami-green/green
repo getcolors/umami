@@ -51,7 +51,7 @@
 ;; cannot resolve its own library says so rather than inventing a SHA or
 ;; silently falling back to whatever is lying around. `bb pin` refuses to stamp
 ;; a dirty or unpushed HEAD for the same reason.
-(def ^:private umami-sha "36b40842d35a84c65ffc64f0e963a7f40e7ba6f9")
+(def ^:private umami-sha "5dc30afd28faae2570057d596c3c097bc26b3ee7")
 
 (def ^:private umami-git-url "https://github.com/getcolors/umami.git")
 (def ^:private green-git-url "https://github.com/getcolors/green.git")
