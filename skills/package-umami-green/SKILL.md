@@ -1,6 +1,6 @@
 ---
 name: package-umami-green
-description: Provisions and operates production-oriented single-node Umami web analytics with PostgreSQL and Caddy on one DigitalOcean Droplet.
+description: Provisions and operates production-oriented single-node Umami web analytics with PostgreSQL and Caddy on one VM through colors-compute.
 license: MIT
 ---
 
@@ -10,37 +10,29 @@ Operate one Umami web analytics deployment from non-secret `colors.yml`. Read
 [references/configuration.md](references/configuration.md) before changing
 configuration or running a lifecycle operation.
 
-## Provider
+## Compute ownership
 
-`provider-compute` selects the machine; the one advertised provider is
-`digitalocean` (one Droplet, the region's default VPC discovered at runtime,
-a provider firewall in front of it). It reads its own keys and its own
-credential:
+The pinned `colors-compute` library owns provider selection, remote S3/R2
+state, deployment coordination, machine keys, network policy and the single
+node. This package supplies singleton topology and SSH/HTTP ingress, then
+uses the returned address, login user and SSH identity for its application
+steps. New provider support belongs in the library; consumers update its pin.
+The application needs a supported Ubuntu image and sufficient memory for
+Umami and its database. Build first to check adapter capabilities.
 
-| Provider | Credential | Keys |
-|---|---|---|
-| `digitalocean` | `COLORS_PAR_DO_TOKEN` | `digitalocean-region`, `digitalocean-size`, `digitalocean-image`, `digitalocean-ssh-sources`, `digitalocean-http-sources`; optional `digitalocean-name`, `digitalocean-ssh-keys` |
+Use `umami-ssh-sources` and `umami-http-sources` for neutral CIDR
+allowlists. Existing selected-provider source options remain compatible.
+External account key references require `ssh-private-key-path`; external
+private keys are never generated or removed. The local SSH block writes
+`IdentityFile` only for a managed deployment key.
 
-- `digitalocean-name` is optional and defaults to the profile.
-- `digitalocean-ssh-keys` is optional. Leave it out and the package generates
-  and owns the machine keypair at `~/.ssh/<profile>` on the first real create
-  (keygen mode, the default); set it to an existing account key id to use that
-  key instead.
-- A real create also writes a managed `Host <profile>` block into
-  `~/.ssh/config`, between `# BEGIN <profile> ANSIBLE MANAGED BLOCK` and
-  `# END …` markers, so `ssh <profile>` reaches the machine; `delete` removes
-  it before the machine is destroyed. The alias is the profile — there is no
-  separate key for it. A `Host <profile>` stanza that already exists outside
-  those markers, or an option standing above the first `Host` line of the
-  file, refuses the create with the file and line named; the package never
-  overwrites either. Remove or rename the stanza, move the global options
-  below the block or into a `Host *` stanza at the end, or change `profile`.
-- `digitalocean-ssh-sources` must list at least one CIDR; every entry of both
-  source keys must be a valid IPv4 or IPv6 CIDR. An empty
-  `digitalocean-http-sources` means no public HTTP.
-- Switching providers is a rebuild, never an apply: `delete` on the recorded
-  provider first, then `create` on the new one. A changed `provider-compute`
-  on a profile that holds a machine is refused.
+Existing `<profile>/umami-infrastructure.tfstate` is refused before
+compute mutation. Do not remove it to bypass this check: migrate ownership
+explicitly or destroy the old deployment through its original version first.
+Unreadable state and provider mismatches fail closed.
+
+The default adapter remains `digitalocean`. The node requests TCP22/80/443;
+The application and database ports remain private to Compose.
 
 ## Safety
 

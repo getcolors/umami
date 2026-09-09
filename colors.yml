@@ -52,7 +52,9 @@ digitalocean-name: umami-digitalocean
 digitalocean-region: ams3
 digitalocean-size: s-4vcpu-8gb
 digitalocean-image: ubuntu-24-04-x64
-digitalocean-ssh-keys: "58495393"
+# Managed keys are the default. For an existing key, set both values:
+# digitalocean-ssh-keys: "58495393"
+# ssh-private-key-path: /absolute/path/to/operator-key
 
 digitalocean-ssh-sources:
   - 0.0.0.0/0

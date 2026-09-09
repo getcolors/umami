@@ -5,20 +5,40 @@ A reproducible [Colors](https://www.getcolors.ai) tri-colour Package Skill
 DigitalOcean with origin TLS via Caddy, Cloudflare DNS, and disaster recovery
 via scheduled R2 backups.
 
+## Compute ownership
+
+The pinned `colors-compute` library owns provider selection, remote S3/R2
+state, deployment coordination, machine keys, network policy and the single
+node. This package supplies singleton topology and SSH/HTTP ingress, then
+uses the returned address, login user and SSH identity for its application
+steps. New provider support belongs in the library; consumers update its pin.
+The application needs a supported Ubuntu image and sufficient memory for
+Umami and its database. Build first to check adapter capabilities.
+
+Use `umami-ssh-sources` and `umami-http-sources` for neutral CIDR
+allowlists. Existing selected-provider source options remain compatible.
+External account key references require `ssh-private-key-path`; external
+private keys are never generated or removed. The local SSH block writes
+`IdentityFile` only for a managed deployment key.
+
+Existing `<profile>/umami-infrastructure.tfstate` is refused before
+compute mutation. Do not remove it to bypass this check: migrate ownership
+explicitly or destroy the old deployment through its original version first.
+Unreadable state and provider mismatches fail closed.
+
+The default adapter remains `digitalocean`. The node requests TCP22/80/443;
+The application and database ports remain private to Compose.
+
 ## Architecture
 
 - **Umami**: `ghcr.io/umami-software/umami:postgresql-v2.14.0` on internal Docker network.
 - **Database**: PostgreSQL 17 (`postgres:17-alpine`) with persistent data on `/var/lib/umami/postgres`.
 - **Ingress**: Caddy (`caddy:2.11.4`) terminating TLS on 80/443 and proxying to port 3000.
 - **Disaster Recovery**: Systemd timer `umami-backup.timer` executing `/usr/local/sbin/umami-backup` to `pg_dump` and upload via `rclone` to Cloudflare R2.
-- **Compute**: Single DigitalOcean Droplet with dynamic account default VPC
-  discovery, selected by `provider-compute` from a one-entry registry. The
-  provider operations — selection, the CIDR checks, the rebuild-only switch
-  rule — are ONCE's `compute` namespace over that registry (the workspace
-  Compute Provider Standard).
-- **Access**: The machine keypair is generated and owned by the deployment at
-  `~/.ssh/<profile>` (the SSH Keypair Standard); set `digitalocean-ssh-keys` to
-  an existing account key to opt out.
+- **Compute**: One library-owned VM, with DigitalOcean as the default adapter.
+  Provider resources, remote state and machine-key lifecycle belong to colors-compute.
+- **Access**: Managed mode owns `~/.ssh/<profile>`. Existing provider keys require
+  an explicit `ssh-private-key-path`.
 - **Reach**: `ssh <profile>` works: the package writes a managed block in
   `~/.ssh/config` (the SSH Config Standard) on create and removes it on delete.
 

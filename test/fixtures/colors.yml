@@ -1,10 +1,11 @@
 # Desired state for umami-digitalocean fixture. Non-secret values only.
 profile: umami-fixture
 workdir: WORKDIR
+ssh-private-key-path: /home/build-placeholder/.ssh/operator-key
 
 provider-compute: digitalocean
 provider-dns: cloudflare
-provider-backend: local
+provider-backend: r2
 
 # Preserve this guard in committed desired state.
 compute-prevent-destroy: true

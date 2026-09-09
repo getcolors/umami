@@ -5,7 +5,8 @@
 ;; own `tofu output failed:` ex-info. An older green under this ONCE would crash
 ;; a fresh-clone create instead of reporting its credentials.
 {:paths ["src/clj" "src/resources"]
- :deps {org.clojure/clojure       {:mvn/version "1.12.5"}
+ :deps {io.github.getcolors/colors-compute {:git/url "https://github.com/getcolors/colors-compute.git" :git/sha "422c3f39d22be93efa703da09eb192490942ede3" :deps/root "green"}
+        org.clojure/clojure       {:mvn/version "1.12.5"}
         io.github.getcolors/green {:git/url "https://github.com/getcolors/green.git"
                                    :git/sha "3f33f5d4dcce1f8d97a11b6972e13eb3f0b37654"}
         io.github.getcolors/once  {:git/url "https://github.com/getcolors/once.git"

@@ -11,64 +11,14 @@ from __future__ import annotations
 import re
 
 from blue.cli import par_name
-from package_once_blue import compute as once_compute
-from package_once_blue import ssh as once_ssh
+from . import compute
+from colors_compute.ssh import _mode
 from package_once_blue.validate import providers as once_providers
 
 profile_par = par_name("profile")
 
-# provider-compute -> what that choice implies.
-#
-# `required` are the non-secret keys that provider's template interpolates,
-# `secrets` the credentials it needs through COLORS_PAR_*, and `tofu-env` the
-# subset OpenTofu reads from the process environment itself. Keeping the three
-# together is what stops a provider being validated against one set of keys and
-# run with another -- a stage exporting a credential nobody checked for, or a
-# check demanding a key no template uses. The keys of this map are the
-# advertised providers; a provider without a template directory and a golden
-# is not advertised. One entry today: this package conforms to the Compute
-# Provider Standard with a one-entry registry, and a second provider would be
-# a copy of this shape rather than a design.
-#
-# The provider needs firewall sources because this package puts a provider
-# firewall in front of the host; ONCE's compute templates have none, so its
-# registry entries are shorter.
-#
-# Two keys the template reads are deliberately not required. `digitalocean-name`
-# is an optional override of the profile (Compute Name Standard), and
-# `digitalocean-ssh-keys` is meaningful by its absence (SSH Keypair Standard).
-# `digitalocean-https-sources`, which older desired state carries, is accepted
-# and ignored: the template opens 443 from `digitalocean-http-sources`.
-compute_providers = {
-    "digitalocean": {
-        "required": ["digitalocean-region", "digitalocean-size", "digitalocean-image",
-                     "digitalocean-ssh-sources", "digitalocean-http-sources"],
-        "secrets": ["do-token"],
-        "tofu-env": {"do-token": "DIGITALOCEAN_TOKEN"},
-    },
-}
-
-# The provider a deployment created before this package recorded one in its
-# compute output must be running. A legacy state -- `params` without
-# `provider` -- is whatever this value says it is, and every state this package
-# has ever written is a DigitalOcean one (`umami-digitalocean` holds no live
-# droplet today, but its R2 state may still carry such a `params`). The Compute
-# Provider Standard's legacy rule accepts a legacy state on this provider alone.
 default_compute_provider = "digitalocean"
 
-# How this package describes itself to ONCE's `compute`, the Compute Provider
-# Standard's operations over a package-owned registry. The registry and the
-# default are the data above; `sources` names the firewall lists the template
-# reads -- SSH must list at least one CIDR, an empty HTTP list means no public
-# HTTP. The name rules are ONCE's.
-spec: once_compute.ComputeSpec = {
-    "registry": compute_providers,
-    "default": default_compute_provider,
-    "sources": {"non_empty": ["ssh-sources"], "may_be_empty": ["http-sources"]},
-}
-
-# Every key desired state must carry whichever provider is selected. The
-# provider-scoped keys come from `compute_providers`.
 required = [
     "profile", "workdir", "provider-compute", "provider-dns", "provider-backend",
     "compute-prevent-destroy", "umami-host", "caddy-image",
@@ -94,26 +44,11 @@ def env_errors(env: dict) -> list[str]:
     return []
 
 
-# `<provider>-<suffix>`: desired state names compute keys after the provider,
-# so the shared steps reach them through the selected provider rather than a
-# fixed prefix. ONCE's; named here so `tools` reads the same.
-compute_key = once_compute.compute_key
-
-# What this deployment's machine is called: `digitalocean-name` when present,
-# else the profile (Compute Name Standard). ONCE's; the template, the firewall
-# and the playbook derive every label from this one answer.
-compute_name = once_compute.compute_name
-
-
-def keygen(opts: dict) -> bool:
-    """Whether this deployment owns its machine keypair. Delegates to ONCE, the
-    standard's reference implementation, so one rule decides it everywhere."""
-    return once_ssh.keygen(opts)
-
-
-# A source list as desired state or an overlay string carries it. ONCE's, so
-# the validator and the template can never disagree about what an entry is.
-cidrs = once_compute.cidrs
+def keygen(opts):
+    try:
+        return _mode(opts)['mode'] == 'managed'
+    except ValueError:
+        return True
 
 
 def _positive_int(value) -> bool:
@@ -127,13 +62,13 @@ def state_errors(opts: dict) -> list[str]:
     provider rules, DigitalOcean's VPC refusal among them -- which are ONCE's
     over `spec`."""
     errors: list[str] = []
-    for key in [*required, *once_compute.required_keys(spec, opts)]:
+    for key in required:
         if missing(opts.get(key)):
             errors.append(f":{key} is required")
     if opts.get("provider-dns") != "cloudflare":
         errors.append(":provider-dns must be cloudflare")
-    if opts.get("provider-backend") not in ("local", "s3", "r2"):
-        errors.append(":provider-backend must be local, s3, or r2")
+    if opts.get("provider-backend") not in ("s3", "r2"):
+        errors.append(":provider-backend must be s3 or r2")
     if not isinstance(opts.get("compute-prevent-destroy"), bool):
         errors.append(":compute-prevent-destroy must be true or false")
     if not (missing(opts.get("umami-host"))
@@ -147,7 +82,7 @@ def state_errors(opts: dict) -> list[str]:
         value = opts.get(key)
         if not missing(value) and not _positive_int(value):
             errors.append(f":{key} must be a positive integer")
-    errors += once_compute.state_errors(spec, opts)
+    errors += compute.errors(opts)
     return errors
 
 
@@ -161,7 +96,7 @@ def secret_errors(opts: dict) -> list[str]:
     """Credentials a real create or delete needs: the selected compute
     provider's, Cloudflare's, the application's, the backup bucket's, and the
     backend's."""
-    keys = [*once_compute.secrets(spec, opts),
+    keys = [
             "cloudflare-api-token", "postgres-password", "umami-admin-password"]
     # The compose template interpolates these at run time and carries no
     # fallback, so an unset value would silently render an empty password or
@@ -183,7 +118,7 @@ def secret_errors(opts: dict) -> list[str]:
 
 def tofu_env(opts: dict, slot: str) -> dict[str, str]:
     if slot == "provider-compute":
-        return once_compute.tofu_env(spec, opts)
+        return {}
     if slot == "provider-dns":
         return {"cloudflare-api-token": "CLOUDFLARE_API_TOKEN"}
     if slot == "provider-backend":

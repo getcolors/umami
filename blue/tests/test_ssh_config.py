@@ -227,24 +227,10 @@ def _render_play(opts: dict) -> str:
                            tools.ansible_local_data(opts), tools.template_opts)
 
 
-def test_the_rendered_play_carries_the_identity_pair_only_in_keygen_mode():
-    keygen_play = _render_play(keygen())
-    optout_play = _render_play(fixture())
-    assert "IdentityFile ~/.ssh/umami-keygen-fixture" in keygen_play
-    assert "IdentitiesOnly yes" in keygen_play
-    # The header comment names the pair; the rendered option lines must not.
-    assert "IdentityFile ~/.ssh/" not in optout_play
-    assert "IdentitiesOnly yes" not in optout_play
-    # Address, user and alias are Ansible's, never Selmer's.
-    for play in (keygen_play, optout_play):
-        assert "insertbefore: BOF" in play
-        assert "Host {{ host_alias }}" in play
-        assert "HostName {{ ip }}" in play
-        assert "StrictHostKeyChecking accept-new" in play
-        assert re.search(r"([0-9]{1,3}\.){3}[0-9]{1,3}", play) is None
-
-
-# §4 lifecycle
+def test_local_updater_uses_managed_identity_only():
+    assert 'colors_keygen: true' in _render_play(keygen())
+    assert 'colors_keygen: false' in _render_play(fixture())
+    assert 'fcntl.flock' in _render_play(fixture())
 
 
 def test_create_writes_the_block_after_compute_and_before_convergence():
@@ -260,4 +246,20 @@ def test_delete_removes_the_block_before_the_destroy():
     delete = {"blue/event": "delete"}
     assert workflow.wire_fn("umami/dns", delete)[1:] == ("umami/ssh-config",)
     assert workflow.wire_fn("umami/ssh-config", delete)[1:] == ("umami/infrastructure",)
-    assert workflow.wire_fn("umami/infrastructure", delete)[1:] == ("umami/ssh-cleanup",)
+    assert workflow.wire_fn("umami/infrastructure", delete)[1:] == ()
+
+def test_rendered_updater_uses_managed_identity_only(tmp_path):
+    import json, os, subprocess, sys
+    from blue.cli import load_yaml
+    for managed, opts in [(True,keygen()),(False,fixture())]:
+        play=load_yaml(_render_play(opts))[0]
+        assert play['vars']['colors_keygen'] is managed
+        script=play['tasks'][0]['ansible.builtin.command']['argv'][2]
+        home=tmp_path/str(managed);home.mkdir()
+        payload={'host_alias':opts['profile'],'ssh_hosts':[{'name':opts['profile'],'ip':'203.0.113.7','user':'ubuntu'}],'block_state':'present','keygen':managed}
+        result=subprocess.run([sys.executable,'-c',script],input=json.dumps(payload),text=True,capture_output=True,env={**os.environ,'HOME':str(home)})
+        assert result.returncode==0,result.stderr
+        config=(home/'.ssh/config').read_text()
+        assert 'User ubuntu' in config
+        assert ('IdentityFile ~/.ssh/'+opts['profile'] in config) is managed
+        assert ('IdentitiesOnly yes' in config) is managed

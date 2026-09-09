@@ -206,23 +206,10 @@
                       (tools/ansible-local-data opts)
                       tools/template-opts))
 
-(deftest the-rendered-play-carries-the-identity-pair-only-in-keygen-mode
-  (let [keygen-play (render-play (keygen))
-        optout-play (render-play (fixture))]
-    (is (str/includes? keygen-play "IdentityFile ~/.ssh/umami-keygen-fixture"))
-    (is (str/includes? keygen-play "IdentitiesOnly yes"))
-    ;; The header comment names the pair; the rendered option lines must not.
-    (is (not (str/includes? optout-play "IdentityFile ~/.ssh/")))
-    (is (not (str/includes? optout-play "IdentitiesOnly yes")))
-    ;; Address, user and alias are Ansible's, never Selmer's.
-    (doseq [play [keygen-play optout-play]]
-      (is (str/includes? play "insertbefore: BOF"))
-      (is (str/includes? play "Host {{ host_alias }}"))
-      (is (str/includes? play "HostName {{ ip }}"))
-      (is (str/includes? play "StrictHostKeyChecking accept-new"))
-      (is (not (re-find #"([0-9]{1,3}\.){3}[0-9]{1,3}" play))))))
-
-;; §4 lifecycle
+(deftest local-updater-uses-managed-identity-only
+ (is (str/includes? (render-play (keygen)) "colors_keygen: true"))
+ (is (str/includes? (render-play (fixture)) "colors_keygen: false"))
+ (is (str/includes? (render-play (fixture)) "fcntl.flock")))
 
 (deftest create-writes-the-block-after-compute-and-before-convergence
   (is (= [:umami/ssh-config]
@@ -237,5 +224,5 @@
          (vec (rest (workflow/wire-fn :umami/dns {:green/event :delete})))))
   (is (= [:umami/infrastructure]
          (vec (rest (workflow/wire-fn :umami/ssh-config {:green/event :delete})))))
-  (is (= [:umami/ssh-cleanup]
+  (is (= []
          (vec (rest (workflow/wire-fn :umami/infrastructure {:green/event :delete}))))))

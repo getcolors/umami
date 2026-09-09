@@ -7,7 +7,7 @@
             [green.scaffold :as sc]
             [green.tofu :as tofu]
             [green.workflow :as wf]
-            [io.github.getcolors.once.compute :as compute]
+            [io.github.getcolors.umami.compute :as compute]
             [io.github.getcolors.umami.ssh :as ssh]
             [io.github.getcolors.umami.ssh-config :as ssh-config]
             [io.github.getcolors.umami.validate :as validate]))
@@ -23,11 +23,6 @@
 (defn spec [source target data] {:template source :target target :data data :opts template-opts})
 (defn raw-spec [target content] (sc/content-spec target content))
 
-(def cidrs
-  "The source lists as validate parses them, so the template and the
-  validator can never disagree about what an entry is. ONCE's."
-  validate/cidrs)
-
 (defn credential-env [opts & slots]
   (not-empty
    (into {} (keep (fn [[k env-var]]
@@ -35,59 +30,12 @@
          (apply merge (map #(validate/tofu-env opts %) (conj (vec slots) :provider-backend))))))
 (defn backend-credential-env [opts] (credential-env opts))
 
-(def fallback-params
-  "What `build` and `--dry-run` render in place of a compute output: the
-  documentation address, shaped like the selected provider's real `params` so
-  every later stage sees the same keys either way. ONCE's."
-  compute/fallback-params)
-
-(def resolved-compute
-  "Refuse to hand 192.0.2.10 to Ansible on a real converge whose compute
-  output carries no `ip`. ONCE's; `infrastructure-step` is what wires it."
-  compute/resolved-compute)
-
-(def compute-key
-  "`:<provider>-<suffix>`, the selected provider's key. ONCE's, via validate."
-  validate/compute-key)
-
-(def compute-name
-  "The machine's name: `digitalocean-name` when present, else the profile.
-  ONCE's, via validate; the template and the playbook derive every label from
-  it."
-  validate/compute-name)
-
-(defn infrastructure-data
-  "Template values for the compute stage. The name, the keypair mode and the
-  source lists are resolved here once, so a template interpolates values and
-  never branches on which provider it belongs to."
-  [opts]
-  (assoc opts
-         :ssh-keygen (validate/keygen? opts)
-         :compute-name (compute-name opts)
-         :ssh-sources-hcl (tofu/hcl-list (cidrs opts (compute-key opts "ssh-sources")))
-         :http-sources-hcl (tofu/hcl-list (cidrs opts (compute-key opts "http-sources")))))
-
-(defn infrastructure-specs
-  "Providers are selected by template directory, not by conditionals inside one
-   file: `tools/infrastructure/<provider>/main.tf`, rendered to the one
-   `<stage>/main.tf` every later stage reads."
-  [opts]
-  (let [dir (tool-dir opts infrastructure-tool)]
-    [(spec (template (str "infrastructure." (:provider-compute opts)) "main.tf")
-           (str dir "/main.tf") (infrastructure-data opts))]))
-
-(defn infrastructure-step [opts]
-  (let [dir (tool-dir opts infrastructure-tool)
-        result (tofu/tofu-with-spec opts (infrastructure-specs opts)
-                                    {:dir dir :env (credential-env opts :provider-compute)})]
-    (cond
-      (wf/failed? result) result
-      (= :build (:green/event opts)) (merge result (fallback-params opts))
-      (= :delete (:green/event opts)) result
-      :else (resolved-compute result (fallback-params opts) (compute/output-params result)))))
+(defn fallback-params [opts]
+ (when (and (#{:create :delete} (:green/event opts)) (not (:green/dry-run opts))) (throw (ex-info "compute node unavailable" {})))
+ (compute/node (compute/planned opts)))
+(def infrastructure-step compute/infrastructure-step)
 
 (defn zone-id [zone] (format "${data.cloudflare_zone.zone.id}" zone))
-
 (defn dns-data [opts]
   (let [host (str (:umami-host opts))
         zone (or (:cloudflare-zone opts)
@@ -128,7 +76,7 @@
   Standard §6)."
   [opts]
   (assoc opts
-         :ssh-keygen (validate/keygen? opts)
+         :ssh-keygen (validate/keygen? opts) :ssh-identity-present (boolean (:ssh-private-key-path opts))
          :ssh-config-identity-file (ssh-config/identity-file opts)))
 
 (defn ansible-local-specs [opts]
@@ -157,8 +105,8 @@
 (defn inventory [opts]
   (json/generate-string
    {:all {:children {:umami {:hosts {(:profile opts)
-                                     {:ansible_host (or (:ip opts) "192.0.2.10")
-                                      :ansible_user "root"}}}}}}
+                                     {:ansible_host (or (:ip opts) (:ip (fallback-params opts)))
+                                      :ansible_user (or (:user opts) (:user (fallback-params opts)))}}}}}}
    {:pretty true}))
 
 (defn ansible-data
@@ -168,9 +116,9 @@
   the playbook sets."
   [opts]
   (assoc opts
-         :ip (or (:ip opts) "192.0.2.10")
-         :ssh-keygen (validate/keygen? opts)
-         :compute-name (compute-name opts)
+         :ip (or (:ip opts) (:ip (fallback-params opts)))
+         :ssh-keygen (validate/keygen? opts) :ssh-identity-present (boolean (:ssh-private-key-path opts))
+         :compute-name (or (:name opts) (:name (fallback-params opts)))
          :umami-image (or (:umami-image opts)
                           (str "ghcr.io/umami-software/umami:postgresql-"
                                (or (:umami-version opts) "v2.14.0")))
@@ -198,12 +146,8 @@
 
 (defn ansible-step [opts]
   (let [dir (tool-dir opts ansible-tool)]
-    (if (and (= :delete (:green/event opts)) (not (:ip opts)))
-      ;; No compute in state: there is no host to clean up, and the rendered
-      ;; inventory would fall back to 192.0.2.10. Remove the rendered tree the
-      ;; way a completed cleanup would and let the teardown continue.
-      (assoc (sc/scaffold opts (ansible-specs opts))
-             :green/exit 0 :umami/cleanup :skipped-no-compute)
+    (if (and (#{:create :delete} (:green/event opts)) (not (:green/dry-run opts)) (not (:ip opts)))
+      (assoc opts :green/exit 1 :green/err "compute node unavailable")
       (ansible/ansible-with-spec opts
         {:dir dir :inventory "inventory.json"
          :playbooks {:create "main.yml" :delete "cleanup.yml"}
@@ -230,7 +174,7 @@
   (let [r (process/run-with-timeout
            (-> ["ssh" "-o" "StrictHostKeyChecking=no" "-o" "ConnectTimeout=10"]
                (into (ssh/identity-args opts))
-               (conj (str "root@" ip) command))
+               (conj (str (or (:user opts) "root") "@" ip) (if (= "root" (or (:user opts) "root")) command (str "sudo -n -- sh -c '" (str/replace command "'" "'\"'\"'") "'"))))
            {} timeout)]
     (when (zero? (:exit r)) (str/trim (:out r)))))
 
