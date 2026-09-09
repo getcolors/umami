@@ -40,7 +40,7 @@ Umami and its database. Build first to check adapter capabilities.
 
 Use `umami-ssh-sources` and `umami-http-sources` for neutral CIDR
 allowlists. Existing selected-provider source options remain compatible.
-External account key references require `ssh-private-key-path`; external
+External account key references may use `ssh-private-key-path` or operator/agent SSH configuration; external
 private keys are never generated or removed. The local SSH block writes
 `IdentityFile` only for a managed deployment key.
 
@@ -58,7 +58,7 @@ Remote state must use S3 (ambient AWS credentials) or R2 (the two explicit
 backend credentials). Adapter inputs and supported capabilities belong to the
 library; update its dependency to add a provider.
 
-External key references require `ssh-private-key-path`. Managed key generation,
+External key references may use `ssh-private-key-path` or operator/agent SSH configuration. Managed key generation,
 registration, ownership checks and cleanup are library operations. Keys are
 removed only after compute destruction. The local SSH updater locks and
 atomically updates `Host <profile>` with the observed login and address;

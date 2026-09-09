@@ -17,7 +17,7 @@ Umami and its database. Build first to check adapter capabilities.
 
 Use `umami-ssh-sources` and `umami-http-sources` for neutral CIDR
 allowlists. Existing selected-provider source options remain compatible.
-External account key references require `ssh-private-key-path`; external
+External account key references may use `ssh-private-key-path` or operator/agent SSH configuration; external
 private keys are never generated or removed. The local SSH block writes
 `IdentityFile` only for a managed deployment key.
 
@@ -37,8 +37,7 @@ The application and database ports remain private to Compose.
 - **Disaster Recovery**: Systemd timer `umami-backup.timer` executing `/usr/local/sbin/umami-backup` to `pg_dump` and upload via `rclone` to Cloudflare R2.
 - **Compute**: One library-owned VM, with DigitalOcean as the default adapter.
   Provider resources, remote state and machine-key lifecycle belong to colors-compute.
-- **Access**: Managed mode owns `~/.ssh/<profile>`. Existing provider keys require
-  an explicit `ssh-private-key-path`.
+- **Access**: Managed mode owns `~/.ssh/<profile>`. Existing provider keys may use `ssh-private-key-path` or operator/agent SSH configuration.
 - **Reach**: `ssh <profile>` works: the package writes a managed block in
   `~/.ssh/config` (the SSH Config Standard) on create and removes it on delete.
 
