@@ -36,7 +36,7 @@ import { homedir } from "node:os";
 // directory, which would halt Bun's upward resolution of `package-umami-red`
 // and break the development symlink at red/red.
 const PINS = {
-  "package-umami-red": "github:getcolors/umami#745ca8dd2bedd8ec41595881a7cc63fc3d076d73",
+  "package-umami-red": "github:getcolors/umami#da9df7612e16bfb5750c6691000cf3c9468c0b7f",
   "package-once-red": "github:getcolors/once#38e3cd66674a32fb96605e1b17ae6791086ad5c1",
 };
 
